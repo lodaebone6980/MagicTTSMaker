@@ -461,27 +461,20 @@ def voice_library_dialog():
     if not st.session_state.get("api_key"):
         st.warning("⚠️ **샘플 데이터** - 사이드바에서 API 키를 입력하세요")
 
-    # 검색 및 필터
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    # 검색 및 필터 (모두 selectbox/input 사용 - rerun 없이 자동 반영)
+    col1, col2 = st.columns([3, 2])
     with col1:
-        search_query = st.text_input("🔍 검색", placeholder="이름...", key="dlg_search", label_visibility="collapsed")
+        search_query = st.text_input("🔍 검색", placeholder="이름으로 검색...", key="dlg_search", label_visibility="collapsed")
     with col2:
-        selected_language = st.selectbox("언어", LANGUAGES_FILTER, key="dlg_lang", label_visibility="collapsed")
-    with col3:
-        selected_gender = st.selectbox("성별", GENDERS, key="dlg_gender", label_visibility="collapsed")
-    with col4:
-        selected_age = st.selectbox("연령대", AGE_GROUPS, key="dlg_age", label_visibility="collapsed")
+        selected_category = st.selectbox("카테고리", CATEGORIES, key="dlg_cat", label_visibility="collapsed")
 
-    # 카테고리 (간소화)
-    selected_category = st.session_state.get("dlg_filter_category", "All")
-    cat_cols = st.columns(7)
-    short_cats = ["All", "Meme", "Narration", "Game", "News", "Business", "Entertainment"]
-    for i, cat in enumerate(short_cats):
-        with cat_cols[i]:
-            btn_type = "primary" if selected_category == cat else "secondary"
-            if st.button(cat, key=f"dlg_cat_{cat}", type=btn_type, use_container_width=True):
-                st.session_state.dlg_filter_category = cat
-                st.rerun()
+    col3, col4, col5 = st.columns(3)
+    with col3:
+        selected_language = st.selectbox("🌐 언어", LANGUAGES_FILTER, key="dlg_lang", label_visibility="collapsed")
+    with col4:
+        selected_gender = st.selectbox("👤 성별", GENDERS, key="dlg_gender", label_visibility="collapsed")
+    with col5:
+        selected_age = st.selectbox("📅 연령대", AGE_GROUPS, key="dlg_age", label_visibility="collapsed")
 
     # 필터링
     filtered_voices = filter_voices(
@@ -494,42 +487,23 @@ def voice_library_dialog():
     )
 
     # 페이지네이션 설정
-    items_per_page = 30
+    items_per_page = 25
     total_pages = max(1, (len(filtered_voices) + items_per_page - 1) // items_per_page)
 
-    # 현재 페이지
-    current_page = st.session_state.get("dlg_page", 1)
-    if current_page > total_pages:
-        current_page = 1
-
-    # 페이지 선택
-    col_info, col_page = st.columns([2, 3])
+    # 페이지 선택 (slider 사용 - rerun 없이 자동 반영)
+    col_info, col_page = st.columns([1, 2])
     with col_info:
-        st.caption(f"**{len(filtered_voices)}개 보이스** (페이지 {current_page}/{total_pages})")
+        st.caption(f"**{len(filtered_voices)}개 보이스**")
     with col_page:
         if total_pages > 1:
-            page_cols = st.columns([1, 1, 2, 1, 1])
-            with page_cols[0]:
-                if st.button("◀◀", key="dlg_first", disabled=current_page == 1):
-                    st.session_state.dlg_page = 1
-                    st.rerun()
-            with page_cols[1]:
-                if st.button("◀", key="dlg_prev", disabled=current_page == 1):
-                    st.session_state.dlg_page = current_page - 1
-                    st.rerun()
-            with page_cols[2]:
-                new_page = st.number_input("페이지", 1, total_pages, current_page, key="dlg_page_input", label_visibility="collapsed")
-                if new_page != current_page:
-                    st.session_state.dlg_page = new_page
-                    st.rerun()
-            with page_cols[3]:
-                if st.button("▶", key="dlg_next", disabled=current_page == total_pages):
-                    st.session_state.dlg_page = current_page + 1
-                    st.rerun()
-            with page_cols[4]:
-                if st.button("▶▶", key="dlg_last", disabled=current_page == total_pages):
-                    st.session_state.dlg_page = total_pages
-                    st.rerun()
+            current_page = st.slider(
+                "페이지",
+                1, total_pages, 1,
+                key="dlg_page_slider",
+                label_visibility="collapsed"
+            )
+        else:
+            current_page = 1
 
     # 보이스 목록
     if not filtered_voices:
@@ -539,13 +513,15 @@ def voice_library_dialog():
         end_idx = start_idx + items_per_page
         page_voices = filtered_voices[start_idx:end_idx]
 
+        st.caption(f"페이지 {current_page}/{total_pages} ({start_idx+1}-{min(end_idx, len(filtered_voices))})")
+
         for i, voice in enumerate(page_voices):
             global_idx = start_idx + i
             if render_voice_row_dialog(voice, global_idx):
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
                 add_to_recent_voices(voice)
-                st.rerun()
+                st.rerun()  # 선택 시에만 rerun (팝업 닫기)
 
             if i < len(page_voices) - 1:
                 st.markdown("<hr style='margin: 3px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)

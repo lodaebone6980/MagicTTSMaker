@@ -98,47 +98,64 @@ class SupertoneClient:
         }
 
     def get_voices(self) -> List[dict]:
-        """API에서 보이스 목록 가져오기"""
+        """API에서 보이스 목록 가져오기 (페이지네이션 처리)"""
+        all_voices = []
+        next_page_token = None
+
         try:
-            # /voices/search 엔드포인트 사용
-            response = requests.get(
-                f"{SUPERTONE_API_BASE}/voices/search",
-                headers=self.get_headers(),
-                timeout=30
-            )
-            if response.status_code == 200:
+            while True:
+                # 페이지네이션 파라미터
+                params = {"limit": 100}  # 한 번에 100개씩
+                if next_page_token:
+                    params["pageToken"] = next_page_token
+
+                response = requests.get(
+                    f"{SUPERTONE_API_BASE}/voices/search",
+                    headers=self.get_headers(),
+                    params=params,
+                    timeout=30
+                )
+
+                if response.status_code != 200:
+                    st.error(f"보이스 목록 조회 실패: {response.status_code} - {response.text[:200]}")
+                    break
+
                 data = response.json()
                 voices = data.get("voices", data.get("items", []))
+                all_voices.extend(voices)
 
-                # API 응답 형식에 맞게 변환
-                formatted = []
-                for v in voices:
-                    # language 필드 처리 (배열일 수 있음)
-                    lang = v.get("language", ["en"])
-                    if isinstance(lang, list):
-                        lang = lang[0] if lang else "en"
-                    lang_display = {"ko": "Korean", "en": "English", "ja": "Japanese"}.get(lang, lang)
+                # 다음 페이지 토큰 확인
+                next_page_token = data.get("nextPageToken")
+                if not next_page_token:
+                    break
 
-                    # use_cases를 genres로 사용
-                    genres = v.get("use_cases", v.get("genres", v.get("tags", [])))
+            # API 응답 형식에 맞게 변환
+            formatted = []
+            for v in all_voices:
+                # language 필드 처리 (배열일 수 있음)
+                lang = v.get("language", ["en"])
+                if isinstance(lang, list):
+                    lang = lang[0] if lang else "en"
+                lang_display = {"ko": "Korean", "en": "English", "ja": "Japanese"}.get(lang, lang)
 
-                    formatted.append({
-                        "voice_id": v.get("voice_id", v.get("id", "")),
-                        "name": v.get("name", "Unknown"),
-                        "language": lang_display,
-                        "gender": v.get("gender", "Unknown").capitalize(),
-                        "age_group": v.get("age", v.get("age_group", "Unknown")).replace("-", " ").title().replace(" ", "-"),
-                        "genres": [g.capitalize() for g in genres] if genres else [],
-                        "styles": v.get("styles", ["neutral"]),
-                        "description": v.get("description", ""),
-                        "is_new": v.get("is_new", False),
-                        # thumbnail_image_url 필드 사용
-                        "image_url": v.get("thumbnail_image_url", v.get("thumbnail", v.get("image_url", ""))),
-                    })
-                return formatted
-            else:
-                st.error(f"보이스 목록 조회 실패: {response.status_code} - {response.text[:200]}")
-                return []
+                # use_cases를 genres로 사용
+                genres = v.get("use_cases", v.get("genres", v.get("tags", [])))
+
+                formatted.append({
+                    "voice_id": v.get("voice_id", v.get("id", "")),
+                    "name": v.get("name", "Unknown"),
+                    "language": lang_display,
+                    "gender": v.get("gender", "Unknown").capitalize(),
+                    "age_group": v.get("age", v.get("age_group", "Unknown")).replace("-", " ").title().replace(" ", "-"),
+                    "genres": [g.capitalize() for g in genres] if genres else [],
+                    "styles": v.get("styles", ["neutral"]),
+                    "description": v.get("description", ""),
+                    "is_new": v.get("is_new", False),
+                    # thumbnail_image_url 필드 사용
+                    "image_url": v.get("thumbnail_image_url", v.get("thumbnail", v.get("image_url", ""))),
+                })
+            return formatted
+
         except Exception as e:
             st.error(f"API 연결 오류: {str(e)}")
             return []
@@ -374,8 +391,8 @@ def filter_voices(
     return filtered
 
 
-def render_voice_row(voice: Dict, index: int) -> bool:
-    """테이블 행 형태로 보이스 렌더링"""
+def render_voice_row(voice: Dict, index) -> bool:
+    """테이블 행 형태로 보이스 렌더링 (index는 int 또는 str)"""
     cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
 
     with cols[0]:
@@ -411,10 +428,51 @@ def render_voice_row(voice: Dict, index: int) -> bool:
     return False
 
 
+def render_recent_voices_section():
+    """최근 사용한 보이스 섹션"""
+    recent = st.session_state.get("recent_voices", [])
+
+    if not recent:
+        return False
+
+    st.markdown("##### ⏱️ 최근 사용한 보이스")
+
+    # 최근 보이스 테이블 헤더
+    header_cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
+    with header_cols[1]:
+        st.caption("**이름**")
+    with header_cols[2]:
+        st.caption("**언어**")
+    with header_cols[3]:
+        st.caption("**성별**")
+    with header_cols[4]:
+        st.caption("**연령대**")
+    with header_cols[5]:
+        st.caption("**장르**")
+
+    # 최근 사용 보이스 목록
+    for i, voice in enumerate(recent[:5]):  # 최대 5개만 표시
+        if render_voice_row(voice, f"recent_{i}"):
+            st.session_state.selected_voice = voice
+            st.session_state.selected_voice_id = voice.get("voice_id")
+            st.session_state.show_voice_library = False
+            add_to_recent_voices(voice)
+            st.rerun()
+
+        if i < min(len(recent), 5) - 1:
+            st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
+
+    st.divider()
+    return True
+
+
 def render_voice_library():
     """보이스 라이브러리 - 테이블 형태"""
 
     st.subheader("🎙️ 보이스 라이브러리")
+
+    # 최근 사용한 보이스 섹션 표시
+    render_recent_voices_section()
 
     voices = get_voices_list()
 
@@ -507,6 +565,8 @@ def render_voice_library():
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
                 st.session_state.show_voice_library = False
+                # 최근 사용 보이스에 추가
+                add_to_recent_voices(voice)
                 st.rerun()
 
             # 구분선 (매 행마다)
@@ -527,10 +587,33 @@ def init_session_state():
         "show_voice_library": False,
         "filter_category": "All",
         "api_key": "",
+        "recent_voices": [],  # 최근 사용한 보이스 목록 (최대 10개)
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def add_to_recent_voices(voice: Dict):
+    """보이스를 최근 사용 목록에 추가"""
+    if not voice:
+        return
+
+    voice_id = voice.get("voice_id")
+    if not voice_id:
+        return
+
+    # 기존 목록에서 같은 보이스 제거
+    st.session_state.recent_voices = [
+        v for v in st.session_state.recent_voices
+        if v.get("voice_id") != voice_id
+    ]
+
+    # 맨 앞에 추가
+    st.session_state.recent_voices.insert(0, voice)
+
+    # 최대 10개 유지
+    st.session_state.recent_voices = st.session_state.recent_voices[:10]
 
 
 def render_voice_selector():

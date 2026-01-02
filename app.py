@@ -406,21 +406,27 @@ def render_voice_library():
 
     voices = get_voices_list()
 
-    # 검색 및 새로고침
-    search_col, refresh_col = st.columns([4, 1])
-    with search_col:
-        search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search", label_visibility="collapsed")
-    with refresh_col:
-        if st.button("🔄 새로고침", use_container_width=True):
-            if st.session_state.get("api_key"):
+    # 샘플 데이터 경고
+    if not st.session_state.get("api_voices"):
+        st.warning("⚠️ **샘플 데이터입니다.** 실제 TTS 생성을 위해 아래 '🔄 API에서 보이스 불러오기' 버튼을 클릭하세요.")
+
+    # API에서 보이스 불러오기 버튼 (눈에 띄게)
+    if st.session_state.get("api_key"):
+        if st.button("🔄 API에서 보이스 불러오기 (실제 캐릭터 이미지 + voice_id)", type="primary", use_container_width=True):
+            with st.spinner("API에서 보이스 목록을 가져오는 중..."):
                 client = SupertoneClient(st.session_state.api_key)
                 api_voices = client.get_voices()
                 if api_voices:
                     st.session_state.api_voices = api_voices
-                    st.success(f"✅ {len(api_voices)}개 보이스 로드됨")
+                    st.success(f"✅ {len(api_voices)}개 보이스 로드 완료!")
                     st.rerun()
                 else:
-                    st.warning("API에서 보이스를 가져올 수 없습니다")
+                    st.error("API에서 보이스를 가져올 수 없습니다. API 키를 확인해주세요.")
+    else:
+        st.info("👈 사이드바에서 API 키를 입력하면 실제 보이스를 불러올 수 있습니다.")
+
+    # 검색
+    search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search")
 
     # 카테고리 필터 (가로 버튼)
     st.markdown("##### 카테고리")
@@ -524,14 +530,18 @@ def render_voice_selector():
     with col1:
         if st.session_state.selected_voice:
             voice = st.session_state.selected_voice
-            # 이미지와 정보 함께 표시
-            img_col, info_col = st.columns([0.15, 0.85])
-            with img_col:
-                img_url = voice.get("image_url") or get_avatar_url(voice.get("name", ""), voice.get("gender", "Male"))
-                st.image(img_url, width=60)
-            with info_col:
-                st.success(f"**{voice.get('name')}** ({voice.get('language')}, {voice.get('gender')})")
-                st.caption(voice.get("description", ""))
+            # 샘플 데이터 경고
+            if voice.get("voice_id", "").startswith("preset_"):
+                st.error("⚠️ 샘플 보이스입니다. 보이스 라이브러리에서 'API에서 보이스 불러오기' 버튼을 눌러 실제 보이스를 선택해주세요.")
+            else:
+                # 이미지와 정보 함께 표시
+                img_col, info_col = st.columns([0.15, 0.85])
+                with img_col:
+                    img_url = voice.get("image_url") or get_avatar_url(voice.get("name", ""), voice.get("gender", "Male"))
+                    st.image(img_url, width=60)
+                with info_col:
+                    st.success(f"**{voice.get('name')}** ({voice.get('language')}, {voice.get('gender')})")
+                    st.caption(voice.get("description", ""))
         else:
             st.warning("보이스를 선택해주세요")
 
@@ -550,6 +560,10 @@ def render_settings_panel() -> Optional[TTSSettings]:
         return None
 
     voice = st.session_state.selected_voice
+
+    # 샘플 보이스인 경우 TTS 생성 불가
+    if voice.get("voice_id", "").startswith("preset_"):
+        return None
 
     st.divider()
 

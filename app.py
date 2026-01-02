@@ -13,11 +13,65 @@ import re
 import json
 import base64
 import os
+import threading
+import socket
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from functools import partial
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple, Dict
 import wave
 import zipfile
+
+# ==================== File Server for Large Downloads ====================
+
+FILE_SERVER_PORT = 8501  # Streamlit usually runs on 8501, we'll use 8502
+DOWNLOAD_SERVER_PORT = 8502
+
+class QuietHandler(SimpleHTTPRequestHandler):
+    """조용한 HTTP 핸들러 (로그 최소화)"""
+    def log_message(self, format, *args):
+        pass  # 로그 출력 안 함
+
+    def end_headers(self):
+        # CORS 허용 및 다운로드 강제
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-cache')
+        super().end_headers()
+
+def find_available_port(start_port: int = 8502, max_tries: int = 10) -> int:
+    """사용 가능한 포트 찾기"""
+    for port in range(start_port, start_port + max_tries):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', port))
+                return port
+        except OSError:
+            continue
+    return start_port
+
+def start_file_server(directory: Path, port: int) -> int:
+    """백그라운드에서 파일 서버 시작"""
+    directory.mkdir(exist_ok=True)
+
+    handler = partial(QuietHandler, directory=str(directory))
+
+    try:
+        server = HTTPServer(('0.0.0.0', port), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return port
+    except OSError:
+        # 포트가 이미 사용 중이면 다른 포트 시도
+        new_port = find_available_port(port + 1)
+        server = HTTPServer(('0.0.0.0', new_port), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return new_port
+
+def get_download_url(filename: str, port: int) -> str:
+    """다운로드 URL 생성"""
+    return f"http://localhost:{port}/{filename}"
 
 # ==================== Persistent Storage ====================
 
@@ -823,25 +877,27 @@ def download_settings_dialog():
         st.divider()
         st.success(f"📁 병합된 파일: {merged_size / 1024 / 1024:.2f} MB")
 
-        # 30MB 이하만 다운로드 버튼 사용 (Streamlit 한계)
+        filename = st.session_state.get("merged_audio_filename", "merged.wav")
+        port = st.session_state.get("file_server_port", DOWNLOAD_SERVER_PORT)
+
+        # 30MB 이하는 Streamlit 다운로드 버튼
         if merged_size <= 30 * 1024 * 1024:
             if st.session_state.get("merged_audio"):
                 st.download_button(
                     "🎵 다운로드",
                     st.session_state.merged_audio,
-                    st.session_state.get("merged_audio_filename", "merged.wav"),
+                    filename,
                     "audio/wav",
                     use_container_width=True,
                     type="primary"
                 )
             else:
-                # 메모리에 없으면 파일에서 읽기
                 try:
                     with open(merged_path, "rb") as f:
                         st.download_button(
                             "🎵 다운로드",
                             f.read(),
-                            st.session_state.get("merged_audio_filename", "merged.wav"),
+                            filename,
                             "audio/wav",
                             use_container_width=True,
                             type="primary"
@@ -849,19 +905,14 @@ def download_settings_dialog():
                 except Exception as e:
                     st.error(f"파일 읽기 오류: {e}")
         else:
-            # 30MB 초과 대용량 파일 - 다운로드 버튼 사용 불가
-            st.error("⚠️ 30MB 초과! 브라우저 다운로드가 지원되지 않습니다.")
-
-        # 파일 경로 항상 표시
-        st.markdown("---")
-        st.markdown("**📂 파일 저장 위치:**")
-        st.code(merged_path, language=None)
-
-        if merged_size > 30 * 1024 * 1024:
-            st.warning("👆 위 경로를 파일 탐색기에서 열어 복사하세요!")
-            st.info(f"💡 팁: 터미널에서 `cp '{merged_path}' ~/` 명령으로 홈 폴더로 복사 가능")
-        else:
-            st.caption("💡 다운로드 버튼이 작동하지 않으면 위 경로에서 직접 복사하세요")
+            # 30MB 초과 - 파일 서버 다운로드 링크
+            download_url = get_download_url(filename, port)
+            st.markdown(f"""
+            ### 🎵 대용량 파일 다운로드
+            아래 링크를 클릭하면 다운로드가 시작됩니다:
+            """)
+            st.markdown(f'<a href="{download_url}" download="{filename}" target="_blank" style="display: inline-block; padding: 0.5rem 1rem; background-color: #FF4B4B; color: white; text-decoration: none; border-radius: 0.5rem; font-weight: bold;">📥 다운로드 ({merged_size / 1024 / 1024:.1f} MB)</a>', unsafe_allow_html=True)
+            st.caption(f"💡 다운로드 URL: `{download_url}`")
 
         # 미리듣기 (10MB 미만만)
         if merged_size < 10 * 1024 * 1024 and st.session_state.get("merged_audio"):
@@ -981,6 +1032,12 @@ def voice_library_dialog():
 # ==================== Streamlit UI ====================
 
 def init_session_state():
+    # 파일 서버 시작 (한 번만)
+    if "file_server_port" not in st.session_state:
+        ensure_data_dir()
+        port = start_file_server(DATA_DIR, DOWNLOAD_SERVER_PORT)
+        st.session_state.file_server_port = port
+
     # 파일에서 전역 설정 로드
     if "settings_loaded" not in st.session_state:
         saved_settings = load_global_settings()

@@ -10,24 +10,15 @@ import aiohttp
 import io
 import time
 import re
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple, Dict
 import wave
-import struct
 import zipfile
 
 # ==================== Configuration ====================
 
-# 슈퍼톤 API 설정
 SUPERTONE_API_BASE = "https://supertoneapi.com/v1"
-DEFAULT_RPM = 60  # 분당 요청 제한 (기본값)
-
-# 지원 언어
-LANGUAGES = {
-    "한국어": "ko",
-    "English": "en",
-    "日本語": "ja",
-}
+DEFAULT_RPM = 60
 
 # Sona 모델 버전
 SONA_MODELS = {
@@ -35,45 +26,87 @@ SONA_MODELS = {
     "Sona 2": "sona_speech_2",
 }
 
-# 출력 포맷 (WAV만 지원 - Python 표준 라이브러리 사용)
-OUTPUT_FORMATS = {
-    "WAV": "wav",
-}
+# 카테고리 목록
+CATEGORIES = [
+    "All", "Meme", "Conversational", "Business", "Narration",
+    "Announcement", "Education", "Game", "Storytelling", "Acting",
+    "News", "Entertainment", "Humor"
+]
+
+# 언어 목록
+LANGUAGES_FILTER = ["All", "Korean", "English", "Japanese"]
+LANGUAGE_MAP = {"Korean": "ko", "English": "en", "Japanese": "ja", "All": "all"}
+
+# 성별 목록
+GENDERS = ["All", "Male", "Female"]
+
+# 연령대 목록
+AGE_GROUPS = ["All", "Child", "Young-Adult", "Middle-Aged", "Senior"]
+
+# ==================== Sample Voice Data ====================
+
+SAMPLE_VOICES = [
+    {"voice_id": "anderson", "name": "Anderson", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Storytelling"], "styles": ["neutral", "calm", "serious"], "description": "따뜻하고 신뢰감 있는 내레이션 음성", "is_new": True},
+    {"voice_id": "barbara", "name": "Barbara", "language": "English", "gender": "Female", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "professional"], "description": "전문적이고 명확한 아나운서 음성", "is_new": True},
+    {"voice_id": "daniel", "name": "Daniel", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "authoritative"], "description": "권위있고 신뢰감 있는 뉴스 음성", "is_new": True},
+    {"voice_id": "flop", "name": "Flop", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Game", "Entertainment"], "styles": ["neutral", "energetic", "playful"], "description": "활기차고 재미있는 게임 캐릭터 음성", "is_new": True},
+    {"voice_id": "hyunsook", "name": "Hyunsook", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "friendly", "cheerful"], "description": "밝고 친근한 엔터테인먼트 음성", "is_new": True},
+    {"voice_id": "juho", "name": "Juho", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "warm", "gentle"], "description": "따뜻하고 편안한 대화형 음성", "is_new": True},
+    {"voice_id": "kan", "name": "Kan", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Game", "Acting"], "styles": ["neutral", "dramatic", "intense"], "description": "드라마틱하고 강렬한 연기 음성", "is_new": True},
+    {"voice_id": "mansu", "name": "Mansu", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Humor", "Entertainment"], "styles": ["neutral", "funny", "sarcastic"], "description": "유머러스하고 재치있는 음성", "is_new": True},
+    {"voice_id": "oksoon", "name": "Oksoon", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "cute", "bright"], "description": "귀엽고 밝은 여성 음성", "is_new": True},
+    {"voice_id": "garret", "name": "Garret", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Business"], "styles": ["neutral", "professional", "calm"], "description": "차분하고 전문적인 한국어 남성 음성", "is_new": False},
+    {"voice_id": "minjae", "name": "민재", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "friendly"], "description": "친근하고 자연스러운 한국어 남성 음성", "is_new": False},
+    {"voice_id": "sooyoung", "name": "수영", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["Narration", "Entertainment"], "styles": ["neutral", "warm", "elegant"], "description": "우아하고 따뜻한 한국어 여성 음성", "is_new": False},
+    {"voice_id": "jiwon", "name": "지원", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["News", "Business"], "styles": ["neutral", "professional", "clear"], "description": "명확하고 전문적인 한국어 여성 음성", "is_new": False},
+    {"voice_id": "yuki", "name": "Yuki", "language": "Japanese", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Game"], "styles": ["neutral", "cute", "energetic"], "description": "귀엽고 활기찬 일본어 여성 음성", "is_new": False},
+    {"voice_id": "takeshi", "name": "Takeshi", "language": "Japanese", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Narration", "Business"], "styles": ["neutral", "serious", "professional"], "description": "진지하고 전문적인 일본어 남성 음성", "is_new": False},
+]
 
 # ==================== Data Classes ====================
 
 @dataclass
 class TTSBlock:
-    """TTS 생성을 위한 텍스트 블록"""
     index: int
     text: str
     audio_data: Optional[bytes] = None
-    status: str = "pending"  # pending, processing, completed, error
+    status: str = "pending"
     error_message: str = ""
 
 
 @dataclass
 class TTSSettings:
-    """TTS 설정"""
     voice_id: str
+    voice_name: str
     language: str
     style: str
     model: str
     pitch_shift: float
     pitch_variance: float
     speed: float
-    output_format: str
+    output_format: str = "wav"
+
+
+@dataclass
+class Voice:
+    voice_id: str
+    name: str
+    language: str
+    gender: str
+    age_group: str
+    genres: List[str]
+    styles: List[str]
+    description: str = ""
+    is_new: bool = False
 
 
 # ==================== Supertone API Client ====================
 
 class SupertoneClient:
-    """슈퍼톤 API 클라이언트"""
-
     def __init__(self, api_key: str, rpm: int = DEFAULT_RPM):
         self.api_key = api_key
         self.rpm = rpm
-        self.request_interval = 60.0 / rpm  # 요청 간격 (초)
+        self.request_interval = 60.0 / rpm
         self.last_request_time = 0
 
     def get_headers(self) -> dict:
@@ -83,7 +116,6 @@ class SupertoneClient:
         }
 
     def get_voices(self) -> List[dict]:
-        """음성 목록 가져오기"""
         try:
             response = requests.get(
                 f"{SUPERTONE_API_BASE}/voices",
@@ -92,51 +124,9 @@ class SupertoneClient:
             )
             if response.status_code == 200:
                 return response.json().get("voices", [])
-            else:
-                st.error(f"음성 목록 조회 실패: {response.status_code}")
-                return []
-        except Exception as e:
-            st.error(f"API 오류: {str(e)}")
             return []
-
-    def generate_tts(self, text: str, settings: TTSSettings) -> Tuple[Optional[bytes], str]:
-        """TTS 생성 (동기)"""
-        try:
-            # Rate limiting
-            current_time = time.time()
-            time_since_last = current_time - self.last_request_time
-            if time_since_last < self.request_interval:
-                time.sleep(self.request_interval - time_since_last)
-
-            self.last_request_time = time.time()
-
-            payload = {
-                "text": text,
-                "language": settings.language,
-                "style": settings.style,
-                "model": settings.model,
-                "output_format": settings.output_format,
-                "voice_settings": {
-                    "pitch_shift": settings.pitch_shift,
-                    "pitch_variance": settings.pitch_variance,
-                    "speed": settings.speed,
-                }
-            }
-
-            response = requests.post(
-                f"{SUPERTONE_API_BASE}/text-to-speech/{settings.voice_id}/stream",
-                headers=self.get_headers(),
-                json=payload,
-                timeout=60
-            )
-
-            if response.status_code == 200:
-                return response.content, ""
-            else:
-                return None, f"API 오류: {response.status_code} - {response.text}"
-
-        except Exception as e:
-            return None, f"요청 실패: {str(e)}"
+        except Exception:
+            return []
 
     async def generate_tts_async(
         self,
@@ -145,7 +135,6 @@ class SupertoneClient:
         settings: TTSSettings,
         semaphore: asyncio.Semaphore
     ) -> Tuple[Optional[bytes], str]:
-        """TTS 생성 (비동기)"""
         async with semaphore:
             try:
                 payload = {
@@ -172,8 +161,8 @@ class SupertoneClient:
                     if response.status == 200:
                         return await response.read(), ""
                     else:
-                        text = await response.text()
-                        return None, f"API 오류: {response.status} - {text}"
+                        error_text = await response.text()
+                        return None, f"API 오류: {response.status} - {error_text}"
 
             except Exception as e:
                 return None, f"요청 실패: {str(e)}"
@@ -182,14 +171,9 @@ class SupertoneClient:
 # ==================== Text Processing ====================
 
 def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
-    """
-    텍스트를 최대 글자 수에 맞게 블록으로 분리
-    문장 단위로 끊어서 자연스럽게 분리
-    """
     if not text.strip():
         return []
 
-    # 문장 분리 패턴 (한국어/영어/일본어 지원)
     sentence_pattern = r'(?<=[.!?。！？])\s*'
     sentences = re.split(sentence_pattern, text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
@@ -198,13 +182,11 @@ def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
     current_block = ""
 
     for sentence in sentences:
-        # 문장 자체가 max_chars보다 길면 단어 단위로 분리
         if len(sentence) > max_chars:
             if current_block:
                 blocks.append(current_block.strip())
                 current_block = ""
 
-            # 단어 단위로 분리
             words = sentence.split()
             temp_block = ""
             for word in words:
@@ -217,7 +199,6 @@ def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
             if temp_block:
                 blocks.append(temp_block.strip())
         else:
-            # 현재 블록에 문장 추가 가능한지 확인
             if len(current_block) + len(sentence) + 1 <= max_chars:
                 current_block += " " + sentence if current_block else sentence
             else:
@@ -234,7 +215,6 @@ def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
 # ==================== Audio Processing ====================
 
 def read_wav_data(wav_bytes: bytes) -> Tuple[Optional[bytes], int, int, int]:
-    """WAV 바이트에서 오디오 데이터 추출"""
     try:
         with io.BytesIO(wav_bytes) as wav_buffer:
             with wave.open(wav_buffer, 'rb') as wav_file:
@@ -246,10 +226,8 @@ def read_wav_data(wav_bytes: bytes) -> Tuple[Optional[bytes], int, int, int]:
 
 
 def create_silence_bytes(duration_seconds: float, sample_rate: int, channels: int, sample_width: int) -> bytes:
-    """무음 바이트 생성"""
     num_frames = int(duration_seconds * sample_rate)
-    silence = b'\x00' * (num_frames * channels * sample_width)
-    return silence
+    return b'\x00' * (num_frames * channels * sample_width)
 
 
 def merge_audio_blocks(
@@ -258,15 +236,6 @@ def merge_audio_blocks(
     sentence_gap_seconds: float = 0.5,
     output_format: str = "wav"
 ) -> bytes:
-    """
-    오디오 블록들을 하나로 병합 (순수 Python wave 모듈 사용)
-
-    Args:
-        audio_blocks: 오디오 바이트 리스트
-        word_gap_percent: 단어 사이 간격 (100% = 원본 유지, 현재 미지원)
-        sentence_gap_seconds: 문장 사이 간격 (초)
-        output_format: 출력 포맷 (wav만 지원)
-    """
     if not audio_blocks:
         return b""
 
@@ -274,7 +243,6 @@ def merge_audio_blocks(
     if not valid_blocks:
         return b""
 
-    # 첫 번째 유효한 오디오에서 파라미터 추출
     first_frames, sample_rate, channels, sample_width = read_wav_data(valid_blocks[0])
     if first_frames is None:
         return b""
@@ -288,7 +256,6 @@ def merge_audio_blocks(
 
         all_frames.append(frames)
 
-        # 마지막 블록이 아니면 문장 간격 추가
         if i < len(valid_blocks) - 1 and sentence_gap_seconds > 0:
             silence = create_silence_bytes(sentence_gap_seconds, sample_rate, channels, sample_width)
             all_frames.append(silence)
@@ -296,7 +263,6 @@ def merge_audio_blocks(
     if not all_frames:
         return b""
 
-    # WAV 파일로 합치기
     combined_frames = b''.join(all_frames)
 
     output_buffer = io.BytesIO()
@@ -317,21 +283,13 @@ async def process_blocks_parallel(
     settings: TTSSettings,
     progress_callback=None
 ) -> List[TTSBlock]:
-    """블록들을 병렬로 처리"""
-
-    # RPM에 맞춰 동시 요청 수 제한
-    max_concurrent = min(len(blocks), client.rpm // 10)  # RPM의 1/10로 동시 요청
-    max_concurrent = max(1, max_concurrent)
-
+    max_concurrent = min(len(blocks), max(1, client.rpm // 10))
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async with aiohttp.ClientSession() as session:
         tasks = []
-
         for block in blocks:
-            task = process_single_block(
-                client, session, block, settings, semaphore, progress_callback
-            )
+            task = process_single_block(client, session, block, settings, semaphore, progress_callback)
             tasks.append(task)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -352,12 +310,9 @@ async def process_single_block(
     semaphore: asyncio.Semaphore,
     progress_callback=None
 ) -> TTSBlock:
-    """단일 블록 처리"""
     block.status = "processing"
 
-    audio_data, error = await client.generate_tts_async(
-        session, block.text, settings, semaphore
-    )
+    audio_data, error = await client.generate_tts_async(session, block.text, settings, semaphore)
 
     if audio_data:
         block.audio_data = audio_data
@@ -372,236 +327,320 @@ async def process_single_block(
     return block
 
 
+# ==================== Voice Library UI ====================
+
+def get_voices_list() -> List[Dict]:
+    """보이스 목록 반환 (API 또는 샘플 데이터)"""
+    if "api_voices" in st.session_state and st.session_state.api_voices:
+        return st.session_state.api_voices
+    return SAMPLE_VOICES
+
+
+def filter_voices(
+    voices: List[Dict],
+    category: str = "All",
+    language: str = "All",
+    gender: str = "All",
+    age_group: str = "All",
+    search_query: str = ""
+) -> List[Dict]:
+    """보이스 필터링"""
+    filtered = voices
+
+    if category != "All":
+        filtered = [v for v in filtered if category in v.get("genres", [])]
+
+    if language != "All":
+        filtered = [v for v in filtered if v.get("language") == language]
+
+    if gender != "All":
+        filtered = [v for v in filtered if v.get("gender") == gender]
+
+    if age_group != "All":
+        filtered = [v for v in filtered if v.get("age_group") == age_group]
+
+    if search_query:
+        query = search_query.lower()
+        filtered = [v for v in filtered if
+                   query in v.get("name", "").lower() or
+                   query in v.get("description", "").lower()]
+
+    return filtered
+
+
+def render_voice_card(voice: Dict, col) -> bool:
+    """보이스 카드 렌더링 - 선택되면 True 반환"""
+    with col:
+        # 카드 스타일 컨테이너
+        is_selected = st.session_state.get("selected_voice_id") == voice.get("voice_id")
+
+        card_style = "border: 2px solid #00D26A;" if is_selected else "border: 1px solid #444;"
+
+        with st.container():
+            # 이름과 NEW 뱃지
+            name_col, badge_col = st.columns([3, 1])
+            with name_col:
+                st.markdown(f"**{voice.get('name', 'Unknown')}**")
+            with badge_col:
+                if voice.get("is_new"):
+                    st.markdown('<span style="background-color: #00D26A; color: black; padding: 2px 6px; border-radius: 4px; font-size: 10px;">NEW</span>', unsafe_allow_html=True)
+
+            # 정보
+            st.caption(f"🌐 {voice.get('language', '-')} | 👤 {voice.get('gender', '-')} | 📅 {voice.get('age_group', '-')}")
+
+            # 장르
+            genres = voice.get("genres", [])
+            if genres:
+                st.caption(f"🎭 {', '.join(genres[:2])}{'...' if len(genres) > 2 else ''}")
+
+            # 설명
+            desc = voice.get("description", "")
+            if desc:
+                st.caption(f"_{desc[:40]}{'...' if len(desc) > 40 else ''}_")
+
+            # 선택 버튼
+            if st.button("선택", key=f"select_{voice.get('voice_id')}", use_container_width=True):
+                return True
+
+    return False
+
+
+def render_voice_library():
+    """보이스 라이브러리 팝업 렌더링"""
+
+    st.subheader("🎙️ 보이스 라이브러리")
+
+    voices = get_voices_list()
+
+    # 검색 및 필터
+    search_col, refresh_col = st.columns([4, 1])
+    with search_col:
+        search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search")
+    with refresh_col:
+        if st.button("🔄", help="API에서 보이스 목록 새로고침"):
+            if "api_key" in st.session_state and st.session_state.api_key:
+                client = SupertoneClient(st.session_state.api_key)
+                api_voices = client.get_voices()
+                if api_voices:
+                    st.session_state.api_voices = api_voices
+                    st.success(f"✅ {len(api_voices)}개 보이스 로드됨")
+                    st.rerun()
+
+    # 카테고리 필터 (탭 스타일)
+    st.markdown("##### 카테고리")
+    category_cols = st.columns(7)
+    selected_category = st.session_state.get("filter_category", "All")
+
+    for i, cat in enumerate(CATEGORIES[:7]):
+        with category_cols[i]:
+            if st.button(cat, key=f"cat_{cat}",
+                        type="primary" if selected_category == cat else "secondary",
+                        use_container_width=True):
+                st.session_state.filter_category = cat
+                st.rerun()
+
+    # 더 많은 카테고리
+    if len(CATEGORIES) > 7:
+        category_cols2 = st.columns(7)
+        for i, cat in enumerate(CATEGORIES[7:]):
+            with category_cols2[i]:
+                if st.button(cat, key=f"cat_{cat}",
+                            type="primary" if selected_category == cat else "secondary",
+                            use_container_width=True):
+                    st.session_state.filter_category = cat
+                    st.rerun()
+
+    # 필터 드롭다운
+    filter_cols = st.columns(4)
+    with filter_cols[0]:
+        selected_language = st.selectbox("🌐 언어", LANGUAGES_FILTER, key="filter_language")
+    with filter_cols[1]:
+        selected_gender = st.selectbox("👤 성별", GENDERS, key="filter_gender")
+    with filter_cols[2]:
+        selected_age = st.selectbox("📅 연령대", AGE_GROUPS, key="filter_age")
+    with filter_cols[3]:
+        if st.button("필터 초기화", use_container_width=True):
+            st.session_state.filter_category = "All"
+            st.session_state.filter_language = "All"
+            st.session_state.filter_gender = "All"
+            st.session_state.filter_age = "All"
+            st.rerun()
+
+    st.divider()
+
+    # 필터링된 보이스 목록
+    filtered_voices = filter_voices(
+        voices,
+        category=st.session_state.get("filter_category", "All"),
+        language=selected_language,
+        gender=selected_gender,
+        age_group=selected_age,
+        search_query=search_query
+    )
+
+    st.markdown(f"**전체 보이스 ({len(filtered_voices)})**")
+
+    # 보이스 카드 그리드
+    if not filtered_voices:
+        st.info("조건에 맞는 보이스가 없습니다.")
+    else:
+        # 3열 그리드
+        for i in range(0, len(filtered_voices), 3):
+            cols = st.columns(3)
+            for j, col in enumerate(cols):
+                if i + j < len(filtered_voices):
+                    voice = filtered_voices[i + j]
+                    if render_voice_card(voice, col):
+                        st.session_state.selected_voice = voice
+                        st.session_state.selected_voice_id = voice.get("voice_id")
+                        st.session_state.show_voice_library = False
+                        st.rerun()
+
+
 # ==================== Streamlit UI ====================
 
 def init_session_state():
-    """세션 상태 초기화"""
-    if "blocks" not in st.session_state:
-        st.session_state.blocks = []
-    if "processing" not in st.session_state:
-        st.session_state.processing = False
-    if "voices" not in st.session_state:
-        st.session_state.voices = []
-    if "selected_blocks" not in st.session_state:
-        st.session_state.selected_blocks = set()
+    defaults = {
+        "blocks": [],
+        "processing": False,
+        "api_voices": [],
+        "selected_blocks": set(),
+        "selected_voice": None,
+        "selected_voice_id": None,
+        "show_voice_library": False,
+        "filter_category": "All",
+        "api_key": "",
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
-def render_sidebar() -> Tuple[Optional[SupertoneClient], Optional[TTSSettings]]:
-    """사이드바 렌더링 - TTS 설정"""
+def render_voice_selector():
+    """보이스 선택 UI"""
+    st.markdown("##### 🎤 보이스 선택")
 
-    st.sidebar.header("🎙️ TTS 설정")
+    col1, col2 = st.columns([3, 1])
 
-    # API 키 입력
-    api_key = st.sidebar.text_input(
-        "Supertone API Key",
-        type="password",
-        help="슈퍼톤 API 키를 입력하세요"
-    )
-
-    if not api_key:
-        st.sidebar.warning("API 키를 입력해주세요")
-        return None, None
-
-    # RPM 설정
-    rpm = st.sidebar.number_input(
-        "RPM (분당 요청 수)",
-        min_value=1,
-        max_value=1000,
-        value=DEFAULT_RPM,
-        help="API Rate Limit에 맞춰 설정하세요"
-    )
-
-    client = SupertoneClient(api_key, rpm)
-
-    # 음성 목록 로드
-    if st.sidebar.button("🔄 음성 목록 새로고침"):
-        with st.spinner("음성 목록 로딩 중..."):
-            st.session_state.voices = client.get_voices()
-
-    st.sidebar.divider()
-
-    # 음성 선택 (직접 입력 또는 선택)
-    voice_input_method = st.sidebar.radio(
-        "음성 선택 방식",
-        ["직접 입력", "목록에서 선택"],
-        horizontal=True
-    )
-
-    voice_id = ""
-    style = "neutral"
-
-    if voice_input_method == "직접 입력":
-        voice_id = st.sidebar.text_input(
-            "Voice ID",
-            value="",
-            help="슈퍼톤 Voice ID를 입력하세요"
-        )
-        style = st.sidebar.text_input(
-            "스타일",
-            value="neutral",
-            help="예: neutral, happy, sad, angry"
-        )
-    else:
-        if st.session_state.voices:
-            voice_names = [v.get("name", v.get("voice_id", "Unknown")) for v in st.session_state.voices]
-            selected_idx = st.sidebar.selectbox(
-                "음성 선택",
-                range(len(voice_names)),
-                format_func=lambda x: voice_names[x]
-            )
-            if selected_idx is not None:
-                selected_voice = st.session_state.voices[selected_idx]
-                voice_id = selected_voice.get("voice_id", "")
-
-                # 스타일 선택
-                styles = selected_voice.get("styles", ["neutral"])
-                style = st.sidebar.selectbox("스타일", styles)
+    with col1:
+        if st.session_state.selected_voice:
+            voice = st.session_state.selected_voice
+            st.success(f"✅ **{voice.get('name')}** ({voice.get('language')}, {voice.get('gender')})")
+            st.caption(voice.get("description", ""))
         else:
-            st.sidebar.info("음성 목록을 로드해주세요")
-            voice_id = st.sidebar.text_input("Voice ID", value="")
-            style = st.sidebar.text_input("스타일", value="neutral")
+            st.warning("보이스를 선택해주세요")
 
-    st.sidebar.divider()
+    with col2:
+        if st.button("🎙️ 보이스 선택", use_container_width=True, type="primary"):
+            st.session_state.show_voice_library = True
+            st.rerun()
 
-    # 언어 선택
-    language_name = st.sidebar.selectbox(
-        "언어",
-        list(LANGUAGES.keys()),
-        index=0
-    )
-    language = LANGUAGES[language_name]
 
-    # Sona 모델 선택
-    model_name = st.sidebar.selectbox(
-        "Sona 모델",
-        list(SONA_MODELS.keys()),
-        index=1,  # 기본값: Sona 2
-        help="Sona 2가 더 자연스러운 음성을 생성합니다"
-    )
-    model = SONA_MODELS[model_name]
+def render_settings_panel() -> Optional[TTSSettings]:
+    """설정 패널 렌더링"""
 
-    st.sidebar.divider()
-    st.sidebar.subheader("🎛️ 음성 조절")
+    # 보이스 선택 버튼
+    render_voice_selector()
 
-    # 음높이
-    pitch_shift = st.sidebar.slider(
-        "음높이 (Pitch)",
-        min_value=-24.0,
-        max_value=24.0,
-        value=0.0,
-        step=0.5,
-        help="음높이 조절 (-24 ~ +24)"
-    )
+    if not st.session_state.selected_voice:
+        return None
 
-    # 음높이 변화
-    pitch_variance = st.sidebar.slider(
-        "음높이 변화 (Pitch Variance)",
-        min_value=0.0,
-        max_value=2.0,
-        value=1.0,
-        step=0.1,
-        help="음높이 변화량 (0 ~ 2)"
-    )
+    voice = st.session_state.selected_voice
 
-    # 속도
-    speed = st.sidebar.slider(
-        "속도 (Speed)",
-        min_value=0.5,
-        max_value=2.0,
-        value=1.0,
-        step=0.1,
-        help="말하기 속도 (0.5x ~ 2.0x)"
-    )
+    st.divider()
 
-    st.sidebar.divider()
+    col1, col2 = st.columns(2)
 
-    # 출력 포맷
-    format_name = st.sidebar.selectbox(
-        "출력 포맷",
-        list(OUTPUT_FORMATS.keys()),
-        index=0
-    )
-    output_format = OUTPUT_FORMATS[format_name]
+    with col1:
+        # 스타일 선택
+        styles = voice.get("styles", ["neutral"])
+        style = st.selectbox("🎭 말투 (스타일)", styles, key="voice_style")
 
-    if not voice_id:
-        return client, None
+        # 모델 선택
+        model_name = st.selectbox("🤖 Sona 모델", list(SONA_MODELS.keys()), index=1, key="sona_model")
+        model = SONA_MODELS[model_name]
 
-    settings = TTSSettings(
-        voice_id=voice_id,
-        language=language,
+    with col2:
+        # RPM 설정
+        rpm = st.number_input("⚡ RPM", min_value=1, max_value=1000, value=DEFAULT_RPM, key="rpm_setting")
+
+    st.divider()
+    st.markdown("##### 🎛️ 음성 조절")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift", help="Pitch Shift")
+
+    with col2:
+        pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance", help="Pitch Variance")
+
+    with col3:
+        speed = st.slider("속도", 0.5, 2.0, 1.0, 0.1, key="speed", help="Speed")
+
+    # 언어 코드 매핑
+    lang_code_map = {"Korean": "ko", "English": "en", "Japanese": "ja"}
+    language_code = lang_code_map.get(voice.get("language", "English"), "en")
+
+    return TTSSettings(
+        voice_id=voice.get("voice_id"),
+        voice_name=voice.get("name"),
+        language=language_code,
         style=style,
         model=model,
         pitch_shift=pitch_shift,
         pitch_variance=pitch_variance,
         speed=speed,
-        output_format=output_format
+        output_format="wav"
     )
-
-    return client, settings
 
 
 def render_script_input():
-    """스크립트 입력 영역 렌더링"""
+    """스크립트 입력"""
+    st.markdown("##### 📝 스크립트 입력")
 
-    st.header("📝 스크립트 입력")
-
-    # 최대 글자 수 설정
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.columns([4, 1])
     with col1:
         script = st.text_area(
-            "스크립트를 입력하세요",
-            height=200,
-            placeholder="여기에 텍스트를 입력하세요. 300자 단위로 자동 분리됩니다.",
-            key="script_input"
+            "스크립트",
+            height=150,
+            placeholder="여기에 텍스트를 입력하세요. 지정된 글자 수 단위로 자동 분리됩니다.",
+            key="script_input",
+            label_visibility="collapsed"
         )
     with col2:
-        max_chars = st.number_input(
-            "블록 최대 글자 수",
-            min_value=50,
-            max_value=1000,
-            value=300,
-            step=50
-        )
-
+        max_chars = st.number_input("블록 크기", 50, 1000, 300, 50, key="max_chars")
         if script:
-            st.metric("총 글자 수", len(script))
+            st.metric("글자 수", len(script))
 
-    # 블록 분리 미리보기
     if script:
         blocks = split_text_into_blocks(script, max_chars)
 
-        st.subheader(f"📦 분리된 블록 ({len(blocks)}개)")
-
-        for i, block_text in enumerate(blocks):
-            with st.expander(f"블록 {i+1} ({len(block_text)}자)", expanded=False):
-                st.text(block_text)
+        with st.expander(f"📦 분리된 블록 미리보기 ({len(blocks)}개)", expanded=False):
+            for i, block_text in enumerate(blocks):
+                st.text(f"[{i+1}] ({len(block_text)}자) {block_text[:80]}...")
 
         return blocks
 
     return []
 
 
-def render_process_button(client: SupertoneClient, settings: TTSSettings, blocks: List[str]):
-    """처리 버튼 및 진행 상태"""
+def render_process_section(client: SupertoneClient, settings: TTSSettings, blocks: List[str]):
+    """TTS 생성 섹션"""
 
     st.divider()
 
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
-        if st.button(
-            "🚀 TTS 생성 시작",
-            type="primary",
-            use_container_width=True,
-            disabled=not blocks or st.session_state.processing
-        ):
-            st.session_state.processing = True
-            st.session_state.blocks = [
-                TTSBlock(index=i, text=text)
-                for i, text in enumerate(blocks)
-            ]
+        st.markdown(f"**선택된 보이스:** {settings.voice_name} | **블록 수:** {len(blocks)}")
 
-            # 진행 상황 표시
+        if st.button("🚀 TTS 생성 시작", type="primary", use_container_width=True,
+                    disabled=st.session_state.processing):
+
+            st.session_state.processing = True
+            st.session_state.blocks = [TTSBlock(index=i, text=text) for i, text in enumerate(blocks)]
+
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -610,43 +649,34 @@ def render_process_button(client: SupertoneClient, settings: TTSSettings, blocks
 
             def update_progress(block: TTSBlock):
                 completed[0] += 1
-                progress = completed[0] / total
-                progress_bar.progress(progress)
-                status_text.text(f"처리 중: {completed[0]}/{total} ({block.status})")
+                progress_bar.progress(completed[0] / total)
+                status_text.text(f"처리 중: {completed[0]}/{total}")
 
-            # 비동기 처리 실행
             with st.spinner(f"🔄 {len(blocks)}개 블록 병렬 처리 중..."):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
                     st.session_state.blocks = loop.run_until_complete(
-                        process_blocks_parallel(
-                            client,
-                            st.session_state.blocks,
-                            settings,
-                            update_progress
-                        )
+                        process_blocks_parallel(client, st.session_state.blocks, settings, update_progress)
                     )
                 finally:
                     loop.close()
 
             st.session_state.processing = False
-            progress_bar.progress(1.0)
 
-            # 결과 요약
             completed_count = sum(1 for b in st.session_state.blocks if b.status == "completed")
             error_count = sum(1 for b in st.session_state.blocks if b.status == "error")
 
             if error_count == 0:
                 st.success(f"✅ 모든 블록 처리 완료! ({completed_count}개)")
             else:
-                st.warning(f"⚠️ 처리 완료: 성공 {completed_count}개, 실패 {error_count}개")
+                st.warning(f"⚠️ 성공: {completed_count}개, 실패: {error_count}개")
 
             st.rerun()
 
 
 def render_results():
-    """결과 및 다운로드 영역"""
+    """결과 및 다운로드"""
 
     if not st.session_state.blocks:
         return
@@ -656,193 +686,149 @@ def render_results():
     if not completed_blocks:
         return
 
-    st.header("📥 결과 및 다운로드")
+    st.divider()
+    st.markdown("##### 📥 결과 및 다운로드")
 
     # 선택 컨트롤
-    col1, col2 = st.columns(2)
-    with col1:
-        select_all = st.checkbox("모두 선택", value=True, key="select_all")
+    select_all = st.checkbox("모두 선택", value=True, key="select_all")
 
     if select_all:
         st.session_state.selected_blocks = set(range(len(st.session_state.blocks)))
 
-    # 개별 블록 표시 및 선택
-    st.subheader("📋 블록 목록")
-
+    # 블록 목록
     for block in st.session_state.blocks:
-        col1, col2, col3 = st.columns([0.5, 3, 1])
+        col1, col2, col3 = st.columns([0.3, 3, 1])
 
         with col1:
-            is_selected = st.checkbox(
-                "",
-                value=block.index in st.session_state.selected_blocks,
-                key=f"select_{block.index}",
-                disabled=select_all
-            )
-            if is_selected and not select_all:
-                st.session_state.selected_blocks.add(block.index)
-            elif not is_selected and not select_all:
-                st.session_state.selected_blocks.discard(block.index)
+            is_selected = st.checkbox("", value=block.index in st.session_state.selected_blocks,
+                                     key=f"sel_{block.index}", disabled=select_all)
+            if not select_all:
+                if is_selected:
+                    st.session_state.selected_blocks.add(block.index)
+                else:
+                    st.session_state.selected_blocks.discard(block.index)
 
         with col2:
-            status_emoji = {
-                "completed": "✅",
-                "error": "❌",
-                "processing": "🔄",
-                "pending": "⏳"
-            }
-            st.text(f"{status_emoji.get(block.status, '❓')} 블록 {block.index + 1}: {block.text[:50]}...")
+            status_emoji = {"completed": "✅", "error": "❌", "processing": "🔄", "pending": "⏳"}
+            st.text(f"{status_emoji.get(block.status, '❓')} [{block.index+1}] {block.text[:60]}...")
 
         with col3:
             if block.status == "completed" and block.audio_data:
                 st.audio(block.audio_data, format="audio/wav")
-            elif block.status == "error":
-                st.error(block.error_message[:30])
-
-    st.divider()
 
     # 다운로드 옵션
-    st.subheader("⬇️ 다운로드 옵션")
+    st.divider()
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("**오디오 병합 설정**")
-        word_gap = st.slider(
-            "단어 사이 간격 (%)",
-            min_value=50,
-            max_value=200,
-            value=100,
-            step=10,
-            help="100% = 원본 유지"
-        )
-        sentence_gap = st.slider(
-            "문장(블록) 사이 간격 (초)",
-            min_value=0.0,
-            max_value=3.0,
-            value=0.5,
-            step=0.1,
-            help="블록 사이의 무음 시간"
-        )
+        st.markdown("**병합 설정**")
+        word_gap = st.slider("단어 간격 (%)", 50, 200, 100, 10, key="word_gap")
+        sentence_gap = st.slider("문장 간격 (초)", 0.0, 3.0, 0.5, 0.1, key="sentence_gap")
 
     with col2:
         st.markdown("**다운로드**")
 
-        selected_indices = sorted(st.session_state.selected_blocks)
-        selected_completed = [
-            b for b in st.session_state.blocks
-            if b.index in selected_indices and b.status == "completed"
-        ]
+        selected_completed = [b for b in st.session_state.blocks
+                             if b.index in st.session_state.selected_blocks and b.status == "completed"]
 
-        st.info(f"선택된 블록: {len(selected_indices)}개 (완료: {len(selected_completed)}개)")
+        st.info(f"선택: {len(st.session_state.selected_blocks)}개 | 완료: {len(selected_completed)}개")
 
-        # 오디오 다운로드
         if selected_completed:
-            audio_data_list = [b.audio_data for b in selected_completed if b.audio_data]
+            audio_list = [b.audio_data for b in selected_completed if b.audio_data]
 
-            if st.button("🎵 오디오 다운로드 (병합)", use_container_width=True):
-                with st.spinner("오디오 병합 중..."):
-                    # 출력 포맷 확인
-                    output_format = "wav"  # 기본값
+            # 병합 오디오 다운로드
+            merged = merge_audio_blocks(audio_list, word_gap, sentence_gap)
+            if merged:
+                st.download_button("🎵 병합 오디오 다운로드", merged,
+                                  f"tts_merged_{int(time.time())}.wav", "audio/wav",
+                                  use_container_width=True)
 
-                    merged_audio = merge_audio_blocks(
-                        audio_data_list,
-                        word_gap_percent=float(word_gap),
-                        sentence_gap_seconds=float(sentence_gap),
-                        output_format=output_format
-                    )
+            # ZIP 다운로드
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for block in selected_completed:
+                    if block.audio_data:
+                        zf.writestr(f"block_{block.index+1:03d}.wav", block.audio_data)
 
-                    if merged_audio:
-                        st.download_button(
-                            label="📥 병합된 오디오 저장",
-                            data=merged_audio,
-                            file_name=f"tts_merged_{int(time.time())}.{output_format}",
-                            mime=f"audio/{output_format}"
-                        )
-                        st.success("병합 완료!")
-                    else:
-                        st.error("오디오 병합 실패")
-
-            # 개별 오디오 다운로드
-            if st.button("🎵 개별 오디오 다운로드 (ZIP)", use_container_width=True):
-                import zipfile
-
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for block in selected_completed:
-                        if block.audio_data:
-                            zf.writestr(
-                                f"block_{block.index + 1:03d}.wav",
-                                block.audio_data
-                            )
-
-                st.download_button(
-                    label="📥 ZIP 파일 저장",
-                    data=zip_buffer.getvalue(),
-                    file_name=f"tts_blocks_{int(time.time())}.zip",
-                    mime="application/zip"
-                )
+            st.download_button("📦 개별 파일 (ZIP)", zip_buffer.getvalue(),
+                              f"tts_blocks_{int(time.time())}.zip", "application/zip",
+                              use_container_width=True)
 
         # 텍스트 다운로드
-        if selected_indices:
-            selected_texts = [
-                st.session_state.blocks[i].text
-                for i in selected_indices
-                if i < len(st.session_state.blocks)
-            ]
+        if st.session_state.selected_blocks:
+            texts = [st.session_state.blocks[i].text for i in sorted(st.session_state.selected_blocks)
+                    if i < len(st.session_state.blocks)]
+            text_content = "\n\n---\n\n".join([f"[{i+1}]\n{t}" for i, t in enumerate(texts)])
 
-            if st.button("📄 텍스트 다운로드", use_container_width=True):
-                text_content = "\n\n---\n\n".join([
-                    f"[블록 {i+1}]\n{text}"
-                    for i, text in zip(selected_indices, selected_texts)
-                ])
-
-                st.download_button(
-                    label="📥 텍스트 파일 저장",
-                    data=text_content,
-                    file_name=f"tts_script_{int(time.time())}.txt",
-                    mime="text/plain"
-                )
+            st.download_button("📄 텍스트 다운로드", text_content,
+                              f"script_{int(time.time())}.txt", "text/plain",
+                              use_container_width=True)
 
 
 def main():
-    """메인 함수"""
-
     st.set_page_config(
         page_title="Supertone TTS Processor",
         page_icon="🎙️",
         layout="wide"
     )
 
-    st.title("🎙️ Supertone TTS 병렬 처리기")
-    st.caption("슈퍼톤 API를 활용한 대량 TTS 생성 도구")
-
-    # 세션 상태 초기화
     init_session_state()
 
-    # 사이드바 - TTS 설정
-    client, settings = render_sidebar()
+    # 사이드바 - API 키
+    with st.sidebar:
+        st.header("⚙️ 설정")
+        api_key = st.text_input("Supertone API Key", type="password", key="api_key_input")
 
-    if not client:
-        st.info("👈 사이드바에서 API 키를 입력해주세요")
-        return
+        if api_key:
+            st.session_state.api_key = api_key
+            st.success("✅ API 키 설정됨")
+        else:
+            st.warning("API 키를 입력해주세요")
 
-    if not settings:
-        st.warning("👈 사이드바에서 Voice ID를 입력해주세요")
+        st.divider()
+        st.caption("Made with Streamlit")
+        st.caption("Supertone API 활용")
 
-    # 스크립트 입력
-    blocks = render_script_input()
+    # 메인 컨텐츠
+    st.title("🎙️ Supertone TTS 병렬 처리기")
 
-    # 처리 버튼
-    if settings and blocks:
-        render_process_button(client, settings, blocks)
+    # 보이스 라이브러리 표시
+    if st.session_state.show_voice_library:
+        render_voice_library()
 
-    # 결과 표시
-    render_results()
+        if st.button("← 돌아가기", use_container_width=False):
+            st.session_state.show_voice_library = False
+            st.rerun()
+    else:
+        # 일반 UI
+        if not st.session_state.api_key:
+            st.info("👈 사이드바에서 API 키를 입력해주세요")
 
-    # 푸터
-    st.divider()
-    st.caption("Made with Streamlit & Supertone API")
+            # 샘플 데이터로 보이스 라이브러리 미리보기 가능
+            st.divider()
+            st.markdown("### 🎙️ 보이스 라이브러리 미리보기")
+            st.caption("API 키 없이도 보이스 목록을 확인할 수 있습니다 (샘플 데이터)")
+
+            if st.button("보이스 라이브러리 열기", type="primary"):
+                st.session_state.show_voice_library = True
+                st.rerun()
+            return
+
+        client = SupertoneClient(st.session_state.api_key, st.session_state.get("rpm_setting", DEFAULT_RPM))
+
+        # 설정 패널
+        settings = render_settings_panel()
+
+        # 스크립트 입력
+        blocks = render_script_input()
+
+        # TTS 생성
+        if settings and blocks:
+            render_process_section(client, settings, blocks)
+
+        # 결과
+        render_results()
 
 
 if __name__ == "__main__":

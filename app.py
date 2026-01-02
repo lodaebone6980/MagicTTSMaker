@@ -101,13 +101,16 @@ class SupertoneClient:
         """API에서 보이스 목록 가져오기 (페이지네이션 처리)"""
         all_voices = []
         next_page_token = None
+        page_count = 0
 
         try:
             while True:
-                # 페이지네이션 파라미터
-                params = {"limit": 100}  # 한 번에 100개씩
+                page_count += 1
+                # 페이지네이션 파라미터 (여러 형식 시도)
+                params = {"limit": 100}
                 if next_page_token:
                     params["pageToken"] = next_page_token
+                    params["page_token"] = next_page_token  # 대체 형식
 
                 response = requests.get(
                     f"{SUPERTONE_API_BASE}/voices/search",
@@ -121,12 +124,22 @@ class SupertoneClient:
                     break
 
                 data = response.json()
-                voices = data.get("voices", data.get("items", []))
+                voices = data.get("voices", data.get("items", data.get("data", [])))
                 all_voices.extend(voices)
 
-                # 다음 페이지 토큰 확인
-                next_page_token = data.get("nextPageToken")
+                # 다음 페이지 토큰 확인 (여러 형식)
+                next_page_token = data.get("nextPageToken") or data.get("next_page_token") or data.get("cursor")
+
+                # 총 개수 확인 가능하면 체크
+                total = data.get("total", data.get("totalCount", 0))
+                if total and len(all_voices) >= total:
+                    break
+
                 if not next_page_token:
+                    break
+
+                # 무한 루프 방지
+                if page_count > 10:
                     break
 
             # API 응답 형식에 맞게 변환
@@ -480,25 +493,62 @@ def voice_library_dialog():
         search_query=search_query
     )
 
-    st.caption(f"**{len(filtered_voices)}개 보이스**")
+    # 페이지네이션 설정
+    items_per_page = 30
+    total_pages = max(1, (len(filtered_voices) + items_per_page - 1) // items_per_page)
 
-    # 보이스 목록 (스크롤 가능한 컨테이너)
+    # 현재 페이지
+    current_page = st.session_state.get("dlg_page", 1)
+    if current_page > total_pages:
+        current_page = 1
+
+    # 페이지 선택
+    col_info, col_page = st.columns([2, 3])
+    with col_info:
+        st.caption(f"**{len(filtered_voices)}개 보이스** (페이지 {current_page}/{total_pages})")
+    with col_page:
+        if total_pages > 1:
+            page_cols = st.columns([1, 1, 2, 1, 1])
+            with page_cols[0]:
+                if st.button("◀◀", key="dlg_first", disabled=current_page == 1):
+                    st.session_state.dlg_page = 1
+                    st.rerun()
+            with page_cols[1]:
+                if st.button("◀", key="dlg_prev", disabled=current_page == 1):
+                    st.session_state.dlg_page = current_page - 1
+                    st.rerun()
+            with page_cols[2]:
+                new_page = st.number_input("페이지", 1, total_pages, current_page, key="dlg_page_input", label_visibility="collapsed")
+                if new_page != current_page:
+                    st.session_state.dlg_page = new_page
+                    st.rerun()
+            with page_cols[3]:
+                if st.button("▶", key="dlg_next", disabled=current_page == total_pages):
+                    st.session_state.dlg_page = current_page + 1
+                    st.rerun()
+            with page_cols[4]:
+                if st.button("▶▶", key="dlg_last", disabled=current_page == total_pages):
+                    st.session_state.dlg_page = total_pages
+                    st.rerun()
+
+    # 보이스 목록
     if not filtered_voices:
         st.info("조건에 맞는 보이스가 없습니다.")
     else:
-        # 최대 50개까지만 표시 (성능)
-        for i, voice in enumerate(filtered_voices[:50]):
-            if render_voice_row_dialog(voice, i):
+        start_idx = (current_page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+        page_voices = filtered_voices[start_idx:end_idx]
+
+        for i, voice in enumerate(page_voices):
+            global_idx = start_idx + i
+            if render_voice_row_dialog(voice, global_idx):
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
                 add_to_recent_voices(voice)
                 st.rerun()
 
-            if i < min(len(filtered_voices), 50) - 1:
+            if i < len(page_voices) - 1:
                 st.markdown("<hr style='margin: 3px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-
-        if len(filtered_voices) > 50:
-            st.info(f"... 외 {len(filtered_voices) - 50}개 더 있음 (검색으로 좁혀주세요)")
 
 
 # ==================== Streamlit UI ====================
@@ -837,8 +887,22 @@ def main():
                     api_voices = client.get_voices()
                     if api_voices:
                         st.session_state.api_voices = api_voices
-                        st.success(f"✅ {len(api_voices)}개 보이스 로드")
                         st.rerun()
+
+            # 로드된 보이스 수 표시
+            voice_count = len(st.session_state.get("api_voices", []))
+            if voice_count > 0:
+                st.info(f"🎙️ {voice_count}개 보이스 로드됨")
+
+                # 새로고침 버튼
+                if st.button("🔄 보이스 새로고침", use_container_width=True):
+                    with st.spinner("새로고침 중..."):
+                        client = SupertoneClient(api_key)
+                        api_voices = client.get_voices()
+                        if api_voices:
+                            st.session_state.api_voices = api_voices
+                            st.success(f"✅ {len(api_voices)}개 로드 완료!")
+                            st.rerun()
         else:
             st.warning("API 키를 입력해주세요")
 

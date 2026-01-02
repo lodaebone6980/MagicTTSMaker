@@ -444,22 +444,9 @@ def voice_library_dialog():
                 st.rerun()
         st.divider()
 
-    # 샘플 데이터 경고
-    if not st.session_state.get("api_voices"):
-        st.warning("⚠️ **샘플 데이터** - 'API에서 불러오기' 클릭 필요")
-
-    # API에서 보이스 불러오기
-    if st.session_state.get("api_key"):
-        if st.button("🔄 API에서 보이스 불러오기", type="primary", use_container_width=True, key="dlg_load_api"):
-            with st.spinner("로딩 중..."):
-                client = SupertoneClient(st.session_state.api_key)
-                api_voices = client.get_voices()
-                if api_voices:
-                    st.session_state.api_voices = api_voices
-                    st.success(f"✅ {len(api_voices)}개 로드!")
-                    st.rerun()
-                else:
-                    st.error("API 오류")
+    # API 키 없을 때만 샘플 데이터 경고
+    if not st.session_state.get("api_key"):
+        st.warning("⚠️ **샘플 데이터** - 사이드바에서 API 키를 입력하세요")
 
     # 검색 및 필터
     col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -842,6 +829,16 @@ def main():
         if api_key:
             st.session_state.api_key = api_key
             st.success("✅ API 키 설정됨")
+
+            # API 키가 있고 보이스가 없으면 자동 로드
+            if not st.session_state.get("api_voices"):
+                with st.spinner("보이스 로딩 중..."):
+                    client = SupertoneClient(api_key)
+                    api_voices = client.get_voices()
+                    if api_voices:
+                        st.session_state.api_voices = api_voices
+                        st.success(f"✅ {len(api_voices)}개 보이스 로드")
+                        st.rerun()
         else:
             st.warning("API 키를 입력해주세요")
 

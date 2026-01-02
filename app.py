@@ -12,10 +12,9 @@ import time
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
 import wave
 import struct
-from pydub import AudioSegment
+import zipfile
 
 # ==================== Configuration ====================
 
@@ -36,10 +35,9 @@ SONA_MODELS = {
     "Sona 2": "sona_speech_2",
 }
 
-# 출력 포맷
+# 출력 포맷 (WAV만 지원 - Python 표준 라이브러리 사용)
 OUTPUT_FORMATS = {
     "WAV": "wav",
-    "MP3": "mp3",
 }
 
 # ==================== Data Classes ====================
@@ -235,9 +233,23 @@ def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
 
 # ==================== Audio Processing ====================
 
-def create_silence(duration_ms: int, sample_rate: int = 44100) -> AudioSegment:
-    """무음 오디오 생성"""
-    return AudioSegment.silent(duration=duration_ms, frame_rate=sample_rate)
+def read_wav_data(wav_bytes: bytes) -> Tuple[Optional[bytes], int, int, int]:
+    """WAV 바이트에서 오디오 데이터 추출"""
+    try:
+        with io.BytesIO(wav_bytes) as wav_buffer:
+            with wave.open(wav_buffer, 'rb') as wav_file:
+                params = wav_file.getparams()
+                frames = wav_file.readframes(params.nframes)
+                return frames, params.framerate, params.nchannels, params.sampwidth
+    except Exception:
+        return None, 0, 0, 0
+
+
+def create_silence_bytes(duration_seconds: float, sample_rate: int, channels: int, sample_width: int) -> bytes:
+    """무음 바이트 생성"""
+    num_frames = int(duration_seconds * sample_rate)
+    silence = b'\x00' * (num_frames * channels * sample_width)
+    return silence
 
 
 def merge_audio_blocks(
@@ -247,53 +259,53 @@ def merge_audio_blocks(
     output_format: str = "wav"
 ) -> bytes:
     """
-    오디오 블록들을 하나로 병합
+    오디오 블록들을 하나로 병합 (순수 Python wave 모듈 사용)
 
     Args:
         audio_blocks: 오디오 바이트 리스트
-        word_gap_percent: 단어 사이 간격 (100% = 원본 유지)
+        word_gap_percent: 단어 사이 간격 (100% = 원본 유지, 현재 미지원)
         sentence_gap_seconds: 문장 사이 간격 (초)
-        output_format: 출력 포맷 (wav/mp3)
+        output_format: 출력 포맷 (wav만 지원)
     """
     if not audio_blocks:
         return b""
 
-    combined = None
-    sentence_gap_ms = int(sentence_gap_seconds * 1000)
-
-    for i, audio_data in enumerate(audio_blocks):
-        if audio_data is None:
-            continue
-
-        try:
-            # 오디오 데이터를 AudioSegment로 변환
-            audio = AudioSegment.from_file(io.BytesIO(audio_data), format=output_format)
-
-            # 단어 간격 조정 (속도 조절로 구현)
-            if word_gap_percent != 100.0:
-                speed_factor = 100.0 / word_gap_percent
-                audio = audio._spawn(
-                    audio.raw_data,
-                    overrides={"frame_rate": int(audio.frame_rate * speed_factor)}
-                ).set_frame_rate(audio.frame_rate)
-
-            if combined is None:
-                combined = audio
-            else:
-                # 문장 사이 간격 추가
-                silence = create_silence(sentence_gap_ms, audio.frame_rate)
-                combined = combined + silence + audio
-
-        except Exception as e:
-            st.warning(f"블록 {i+1} 오디오 처리 실패: {str(e)}")
-            continue
-
-    if combined is None:
+    valid_blocks = [b for b in audio_blocks if b is not None]
+    if not valid_blocks:
         return b""
 
-    # 출력 포맷으로 변환
+    # 첫 번째 유효한 오디오에서 파라미터 추출
+    first_frames, sample_rate, channels, sample_width = read_wav_data(valid_blocks[0])
+    if first_frames is None:
+        return b""
+
+    all_frames = []
+
+    for i, audio_data in enumerate(valid_blocks):
+        frames, sr, ch, sw = read_wav_data(audio_data)
+        if frames is None:
+            continue
+
+        all_frames.append(frames)
+
+        # 마지막 블록이 아니면 문장 간격 추가
+        if i < len(valid_blocks) - 1 and sentence_gap_seconds > 0:
+            silence = create_silence_bytes(sentence_gap_seconds, sample_rate, channels, sample_width)
+            all_frames.append(silence)
+
+    if not all_frames:
+        return b""
+
+    # WAV 파일로 합치기
+    combined_frames = b''.join(all_frames)
+
     output_buffer = io.BytesIO()
-    combined.export(output_buffer, format=output_format)
+    with wave.open(output_buffer, 'wb') as wav_out:
+        wav_out.setnchannels(channels)
+        wav_out.setsampwidth(sample_width)
+        wav_out.setframerate(sample_rate)
+        wav_out.writeframes(combined_frames)
+
     return output_buffer.getvalue()
 
 

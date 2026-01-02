@@ -409,7 +409,8 @@ def create_silence_bytes(duration_seconds: float, sample_rate: int, channels: in
 
 def merge_audio_blocks(
     audio_blocks: List[bytes],
-    sentence_gap_seconds: float = 0.5
+    sentence_gap_seconds: float = 0.5,
+    word_gap_seconds: float = 0.0
 ) -> bytes:
     if not audio_blocks:
         return b""
@@ -581,6 +582,66 @@ def render_voice_row_dialog(voice: Dict, index) -> bool:
     return False
 
 
+@st.dialog("📥 다운로드 설정", width="small")
+def download_settings_dialog():
+    """병합 오디오 다운로드 설정 팝업"""
+
+    st.markdown("#### 오디오 간격 설정")
+
+    # 기본값 불러오기
+    default_word_gap = st.session_state.get("default_word_gap", 0.0)
+    default_sentence_gap = st.session_state.get("default_sentence_gap", 0.5)
+
+    word_gap = st.slider(
+        "📝 단어 사이 간격 (초)",
+        0.0, 2.0, default_word_gap, 0.05,
+        key="dlg_word_gap",
+        help="각 단어 사이에 추가되는 무음 구간"
+    )
+
+    sentence_gap = st.slider(
+        "📄 문장 사이 간격 (초)",
+        0.0, 3.0, default_sentence_gap, 0.1,
+        key="dlg_sentence_gap",
+        help="각 블록(문장) 사이에 추가되는 무음 구간"
+    )
+
+    st.divider()
+
+    # 기본값 저장 버튼
+    col_save, col_dl = st.columns(2)
+
+    with col_save:
+        if st.button("💾 기본값으로 저장", use_container_width=True):
+            st.session_state.default_word_gap = word_gap
+            st.session_state.default_sentence_gap = sentence_gap
+            st.success("✅ 기본값 저장됨!")
+
+    with col_dl:
+        # 선택된 완료 블록 가져오기
+        selected_completed = [b for b in st.session_state.blocks
+                             if b.index in st.session_state.selected_blocks and b.status == "completed"]
+
+        if selected_completed:
+            audio_list = [b.audio_data for b in selected_completed if b.audio_data]
+            merged = merge_audio_blocks(audio_list, sentence_gap, word_gap)
+
+            if merged:
+                st.download_button(
+                    "🎵 다운로드",
+                    merged,
+                    f"tts_merged_{int(time.time())}.wav",
+                    "audio/wav",
+                    use_container_width=True,
+                    type="primary"
+                )
+        else:
+            st.warning("선택된 오디오 없음")
+
+    # 현재 설정 표시
+    st.caption(f"현재 설정: 단어 {word_gap}초 | 문장 {sentence_gap}초")
+
+
 @st.dialog("🎙️ 보이스 라이브러리", width="large")
 def voice_library_dialog():
     """보이스 라이브러리 팝업 다이얼로그"""
@@ -683,6 +744,11 @@ def init_session_state():
         "api_key": "",
         "recent_voices": [],  # 최근 사용한 보이스 목록 (최대 10개)
         "credits": None,  # 크레딧 잔액
+        # 즐겨찾기 설정 (보이스별)
+        "voice_favorites": {},  # {voice_id: {1: {pitch, variance, speed}, 2: {...}, 3: {...}}}
+        # 기본 간격 설정
+        "default_word_gap": 0.0,  # 단어 사이 간격 (초)
+        "default_sentence_gap": 0.5,  # 문장 사이 간격 (초)
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -749,13 +815,15 @@ def render_settings_panel() -> Optional[TTSSettings]:
         return None
 
     voice = st.session_state.selected_voice
+    voice_id = voice.get("voice_id", "")
 
     # 샘플 보이스인 경우 TTS 생성 불가
-    if voice.get("voice_id", "").startswith("preset_"):
+    if voice_id.startswith("preset_"):
         return None
 
     st.divider()
 
+    # 모델 및 스타일 선택
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -769,31 +837,104 @@ def render_settings_panel() -> Optional[TTSSettings]:
     with col3:
         rpm = st.number_input("⚡ RPM", min_value=1, max_value=1000, value=DEFAULT_RPM, key="rpm_setting")
 
+    # 언어 선택 (모델별 지원 언어)
+    supported_langs = MODEL_LANGUAGES.get(model, ["en", "ko", "ja"])
+    lang_display_map = {
+        "en": "English", "ko": "Korean", "ja": "Japanese",
+        "es": "Spanish", "pt": "Portuguese", "de": "German",
+        "fr": "French", "it": "Italian", "ru": "Russian",
+        "bg": "Bulgarian", "cs": "Czech", "da": "Danish",
+        "el": "Greek", "et": "Estonian", "fi": "Finnish",
+        "hu": "Hungarian", "nl": "Dutch", "pl": "Polish",
+        "ro": "Romanian", "ar": "Arabic", "hi": "Hindi",
+        "id": "Indonesian", "vi": "Vietnamese"
+    }
+    lang_options = [lang_display_map.get(l, l) for l in supported_langs]
+    lang_code_reverse = {v: k for k, v in lang_display_map.items()}
+
+    col_lang, col_rpm2 = st.columns([2, 1])
+    with col_lang:
+        selected_lang_display = st.selectbox("🌐 언어", lang_options, key="tts_language")
+        language_code = lang_code_reverse.get(selected_lang_display, "en")
+
     # 모델별 지원 설정 가져오기
     supported_settings = MODEL_VOICE_SETTINGS.get(model, ["speed"])
 
     st.divider()
     st.markdown("##### 🎛️ 음성 조절")
 
+    # 즐겨찾기 불러오기/저장
+    favorites = st.session_state.voice_favorites.get(voice_id, {})
+
+    fav_col1, fav_col2, fav_col3, fav_col4 = st.columns([1, 1, 1, 2])
+    with fav_col1:
+        if st.button("⭐1 불러오기", use_container_width=True, disabled=1 not in favorites):
+            if 1 in favorites:
+                st.session_state.fav_load = favorites[1]
+                st.rerun()
+    with fav_col2:
+        if st.button("⭐2 불러오기", use_container_width=True, disabled=2 not in favorites):
+            if 2 in favorites:
+                st.session_state.fav_load = favorites[2]
+                st.rerun()
+    with fav_col3:
+        if st.button("⭐3 불러오기", use_container_width=True, disabled=3 not in favorites):
+            if 3 in favorites:
+                st.session_state.fav_load = favorites[3]
+                st.rerun()
+
+    # 즐겨찾기에서 로드된 값 사용
+    fav_loaded = st.session_state.pop("fav_load", None)
+    default_pitch = fav_loaded["pitch_shift"] if fav_loaded else 0.0
+    default_variance = fav_loaded["pitch_variance"] if fav_loaded else 1.0
+    default_speed = fav_loaded["speed"] if fav_loaded else 1.0
+
     # 기본 설정 (항상 표시)
     col1, col2, col3 = st.columns(3)
 
     with col1:
         if "pitch_shift" in supported_settings:
-            pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift")
+            pitch_shift = st.slider("음높이", -24.0, 24.0, default_pitch, 0.5, key="pitch_shift")
         else:
             pitch_shift = 0.0
             st.caption("음높이: 미지원")
 
     with col2:
         if "pitch_variance" in supported_settings:
-            pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance")
+            pitch_variance = st.slider("음높이 변화", 0.0, 2.0, default_variance, 0.1, key="pitch_variance")
         else:
             pitch_variance = 1.0
             st.caption("음높이 변화: 미지원")
 
     with col3:
-        speed = st.slider("속도", 0.5, 2.0, 1.0, 0.1, key="speed")
+        speed = st.slider("속도", 0.5, 2.0, default_speed, 0.1, key="speed")
+
+    # 즐겨찾기 저장 버튼
+    save_col1, save_col2, save_col3 = st.columns(3)
+    with save_col1:
+        if st.button("⭐1 저장", use_container_width=True):
+            if voice_id not in st.session_state.voice_favorites:
+                st.session_state.voice_favorites[voice_id] = {}
+            st.session_state.voice_favorites[voice_id][1] = {
+                "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
+            }
+            st.success("⭐1 저장됨!")
+    with save_col2:
+        if st.button("⭐2 저장", use_container_width=True):
+            if voice_id not in st.session_state.voice_favorites:
+                st.session_state.voice_favorites[voice_id] = {}
+            st.session_state.voice_favorites[voice_id][2] = {
+                "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
+            }
+            st.success("⭐2 저장됨!")
+    with save_col3:
+        if st.button("⭐3 저장", use_container_width=True):
+            if voice_id not in st.session_state.voice_favorites:
+                st.session_state.voice_favorites[voice_id] = {}
+            st.session_state.voice_favorites[voice_id][3] = {
+                "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
+            }
+            st.success("⭐3 저장됨!")
 
     # 고급 설정 (Sona 1 전용)
     duration = 0.0
@@ -814,15 +955,6 @@ def render_settings_panel() -> Optional[TTSSettings]:
                                          help="텍스트 내용에 대한 음성 반응 정도")
                 subharmonic = st.slider("하모닉 진폭", 0.0, 2.0, 1.0, 0.1, key="subharmonic",
                                        help="생성된 음성의 하모닉 진폭 조절")
-
-    # 언어 코드 매핑 (확장)
-    lang_code_map = {
-        "Korean": "ko", "English": "en", "Japanese": "ja",
-        "Spanish": "es", "Portuguese": "pt", "German": "de",
-        "French": "fr", "Italian": "it", "Russian": "ru",
-        "Chinese": "zh", "Custom": "ko"  # 커스텀 보이스 기본값
-    }
-    language_code = lang_code_map.get(voice.get("language", "English"), "en")
 
     return TTSSettings(
         voice_id=voice.get("voice_id"),
@@ -985,29 +1117,23 @@ def render_results():
     # 다운로드 옵션
     st.divider()
 
-    col1, col2 = st.columns(2)
+    selected_completed = [b for b in st.session_state.blocks
+                         if b.index in st.session_state.selected_blocks and b.status == "completed"]
+
+    st.markdown("**📥 다운로드**")
+    st.info(f"선택: {len(st.session_state.selected_blocks)}개 | 완료: {len(selected_completed)}개")
+
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.markdown("**병합 설정**")
-        sentence_gap = st.slider("문장 간격 (초)", 0.0, 3.0, 0.5, 0.1, key="sentence_gap")
+        if selected_completed:
+            if st.button("🎵 병합 오디오 다운로드", use_container_width=True, type="primary"):
+                download_settings_dialog()
+        else:
+            st.button("🎵 병합 오디오 다운로드", use_container_width=True, disabled=True)
 
     with col2:
-        st.markdown("**다운로드**")
-
-        selected_completed = [b for b in st.session_state.blocks
-                             if b.index in st.session_state.selected_blocks and b.status == "completed"]
-
-        st.info(f"선택: {len(st.session_state.selected_blocks)}개 | 완료: {len(selected_completed)}개")
-
         if selected_completed:
-            audio_list = [b.audio_data for b in selected_completed if b.audio_data]
-
-            merged = merge_audio_blocks(audio_list, sentence_gap)
-            if merged:
-                st.download_button("🎵 병합 오디오 다운로드", merged,
-                                  f"tts_merged_{int(time.time())}.wav", "audio/wav",
-                                  use_container_width=True)
-
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for block in selected_completed:
@@ -1018,6 +1144,7 @@ def render_results():
                               f"tts_blocks_{int(time.time())}.zip", "application/zip",
                               use_container_width=True)
 
+    with col3:
         if st.session_state.selected_blocks:
             texts = [st.session_state.blocks[i].text for i in sorted(st.session_state.selected_blocks)
                     if i < len(st.session_state.blocks)]

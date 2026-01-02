@@ -23,6 +23,21 @@ DEFAULT_RPM = 60
 SONA_MODELS = {
     "Sona 1": "sona_speech_1",
     "Sona 2": "sona_speech_2",
+    "Supertonic API 1": "supertonic_api_1",
+}
+
+# 모델별 지원 언어
+MODEL_LANGUAGES = {
+    "sona_speech_1": ["en", "ko", "ja"],
+    "supertonic_api_1": ["en", "ko", "ja", "es", "pt"],
+    "sona_speech_2": ["en", "ko", "ja", "bg", "cs", "da", "el", "es", "et", "fi", "hu", "it", "nl", "pl", "pt", "ro", "ar", "de", "fr", "hi", "id", "ru", "vi"],
+}
+
+# 모델별 지원 음성 설정
+MODEL_VOICE_SETTINGS = {
+    "sona_speech_1": ["pitch_shift", "pitch_variance", "speed", "duration", "similarity", "text_guidance", "subharmonic_amplitude_control"],
+    "supertonic_api_1": ["speed"],  # speed만 지원
+    "sona_speech_2": ["pitch_shift", "pitch_variance", "speed"],
 }
 
 CATEGORIES = [
@@ -81,6 +96,10 @@ class TTSSettings:
     pitch_shift: float
     pitch_variance: float
     speed: float
+    duration: float = 0.0
+    similarity: float = 3.0
+    text_guidance: float = 1.0
+    subharmonic_amplitude_control: float = 1.0
     output_format: str = "wav"
 
 
@@ -96,6 +115,104 @@ class SupertoneClient:
             "Content-Type": "application/json",
             "x-sup-api-key": self.api_key,
         }
+
+    def get_credits(self) -> Optional[float]:
+        """크레딧 잔액 조회"""
+        try:
+            response = requests.get(
+                f"{SUPERTONE_API_BASE}/credits",
+                headers=self.get_headers(),
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("balance")
+            return None
+        except Exception:
+            return None
+
+    def get_custom_voices(self) -> List[dict]:
+        """커스텀(클론) 보이스 목록 가져오기"""
+        all_voices = []
+        next_page_token = None
+        page_count = 0
+
+        try:
+            while True:
+                page_count += 1
+                params = {"page_size": 100}
+                if next_page_token:
+                    params["next_page_token"] = next_page_token
+
+                response = requests.get(
+                    f"{SUPERTONE_API_BASE}/custom-voices",
+                    headers=self.get_headers(),
+                    params=params,
+                    timeout=30
+                )
+
+                if response.status_code != 200:
+                    break
+
+                data = response.json()
+                voices = data.get("items", [])
+                all_voices.extend(voices)
+
+                next_page_token = data.get("next_page_token")
+                total = data.get("total", 0)
+
+                if total and len(all_voices) >= total:
+                    break
+                if not next_page_token:
+                    break
+                if page_count > 10:
+                    break
+
+            # 커스텀 보이스 형식 변환
+            formatted = []
+            for v in all_voices:
+                formatted.append({
+                    "voice_id": v.get("voice_id", ""),
+                    "name": v.get("name", "Unknown"),
+                    "language": "Custom",
+                    "gender": "Custom",
+                    "age_group": "Custom",
+                    "genres": ["Custom"],
+                    "styles": ["default"],
+                    "description": v.get("description", "커스텀 클론 보이스"),
+                    "is_new": False,
+                    "is_custom": True,
+                    "image_url": "",
+                })
+            return formatted
+
+        except Exception:
+            return []
+
+    def predict_duration(self, text: str, voice_id: str, language: str, style: str = None, model: str = "sona_speech_1") -> Optional[float]:
+        """TTS 길이 예측 (크레딧 소모 없음)"""
+        try:
+            payload = {
+                "text": text,
+                "language": language,
+                "model": model,
+            }
+            if style:
+                payload["style"] = style
+
+            response = requests.post(
+                f"{SUPERTONE_API_BASE}/predict-duration/{voice_id}",
+                headers=self.get_headers(),
+                json=payload,
+                timeout=30
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("duration")
+            return None
+        except Exception:
+            return None
 
     def get_voices(self) -> List[dict]:
         """API에서 보이스 목록 가져오기 (페이지네이션 처리)"""
@@ -181,17 +298,32 @@ class SupertoneClient:
     ) -> Tuple[Optional[bytes], str]:
         async with semaphore:
             try:
+                # 모델별 지원 설정에 따라 voice_settings 구성
+                supported_settings = MODEL_VOICE_SETTINGS.get(settings.model, ["speed"])
+                voice_settings = {}
+
+                if "pitch_shift" in supported_settings:
+                    voice_settings["pitch_shift"] = settings.pitch_shift
+                if "pitch_variance" in supported_settings:
+                    voice_settings["pitch_variance"] = settings.pitch_variance
+                if "speed" in supported_settings:
+                    voice_settings["speed"] = settings.speed
+                if "duration" in supported_settings and settings.duration > 0:
+                    voice_settings["duration"] = settings.duration
+                if "similarity" in supported_settings:
+                    voice_settings["similarity"] = settings.similarity
+                if "text_guidance" in supported_settings:
+                    voice_settings["text_guidance"] = settings.text_guidance
+                if "subharmonic_amplitude_control" in supported_settings:
+                    voice_settings["subharmonic_amplitude_control"] = settings.subharmonic_amplitude_control
+
                 payload = {
                     "text": text,
                     "language": settings.language,
                     "style": settings.style,
                     "model": settings.model,
                     "output_format": settings.output_format,
-                    "voice_settings": {
-                        "pitch_shift": settings.pitch_shift,
-                        "pitch_variance": settings.pitch_variance,
-                        "speed": settings.speed,
-                    }
+                    "voice_settings": voice_settings
                 }
 
                 url = f"{SUPERTONE_API_BASE}/text-to-speech/{settings.voice_id}/stream"
@@ -370,10 +502,21 @@ async def process_single_block(
 
 # ==================== Voice Library UI ====================
 
-def get_voices_list() -> List[Dict]:
+def get_voices_list(include_custom: bool = True) -> List[Dict]:
+    """보이스 목록 가져오기 (기본 + 커스텀)"""
+    voices = []
+
+    # API 보이스
     if "api_voices" in st.session_state and st.session_state.api_voices:
-        return st.session_state.api_voices
-    return SAMPLE_VOICES
+        voices.extend(st.session_state.api_voices)
+    else:
+        voices.extend(SAMPLE_VOICES)
+
+    # 커스텀 보이스 추가
+    if include_custom and "custom_voices" in st.session_state and st.session_state.custom_voices:
+        voices.extend(st.session_state.custom_voices)
+
+    return voices
 
 
 def filter_voices(
@@ -533,11 +676,13 @@ def init_session_state():
         "blocks": [],
         "processing": False,
         "api_voices": [],
+        "custom_voices": [],  # 커스텀(클론) 보이스
         "selected_blocks": set(),
         "selected_voice": None,
         "selected_voice_id": None,
         "api_key": "",
         "recent_voices": [],  # 최근 사용한 보이스 목록 (최대 10개)
+        "credits": None,  # 크레딧 잔액
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -611,30 +756,72 @@ def render_settings_panel() -> Optional[TTSSettings]:
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         styles = voice.get("styles", ["neutral"])
         style = st.selectbox("🎭 말투 (스타일)", styles, key="voice_style")
-        model_name = st.selectbox("🤖 Sona 모델", list(SONA_MODELS.keys()), index=0, key="sona_model")
-        model = SONA_MODELS[model_name]
 
     with col2:
+        model_name = st.selectbox("🤖 모델", list(SONA_MODELS.keys()), index=0, key="sona_model")
+        model = SONA_MODELS[model_name]
+
+    with col3:
         rpm = st.number_input("⚡ RPM", min_value=1, max_value=1000, value=DEFAULT_RPM, key="rpm_setting")
+
+    # 모델별 지원 설정 가져오기
+    supported_settings = MODEL_VOICE_SETTINGS.get(model, ["speed"])
 
     st.divider()
     st.markdown("##### 🎛️ 음성 조절")
 
+    # 기본 설정 (항상 표시)
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift")
+        if "pitch_shift" in supported_settings:
+            pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift")
+        else:
+            pitch_shift = 0.0
+            st.caption("음높이: 미지원")
+
     with col2:
-        pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance")
+        if "pitch_variance" in supported_settings:
+            pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance")
+        else:
+            pitch_variance = 1.0
+            st.caption("음높이 변화: 미지원")
+
     with col3:
         speed = st.slider("속도", 0.5, 2.0, 1.0, 0.1, key="speed")
 
-    lang_code_map = {"Korean": "ko", "English": "en", "Japanese": "ja"}
+    # 고급 설정 (Sona 1 전용)
+    duration = 0.0
+    similarity = 3.0
+    text_guidance = 1.0
+    subharmonic = 1.0
+
+    if model == "sona_speech_1":
+        with st.expander("🔧 고급 설정 (Sona 1 전용)", expanded=False):
+            adv_col1, adv_col2 = st.columns(2)
+            with adv_col1:
+                duration = st.slider("목표 길이 (초)", 0.0, 60.0, 0.0, 0.5, key="duration",
+                                    help="0이면 자동, 설정 시 해당 길이에 맞춤")
+                similarity = st.slider("유사도", 1.0, 5.0, 3.0, 0.5, key="similarity",
+                                      help="원본 캐릭터 목소리와의 유사도")
+            with adv_col2:
+                text_guidance = st.slider("텍스트 반응도", 0.0, 4.0, 1.0, 0.5, key="text_guidance",
+                                         help="텍스트 내용에 대한 음성 반응 정도")
+                subharmonic = st.slider("하모닉 진폭", 0.0, 2.0, 1.0, 0.1, key="subharmonic",
+                                       help="생성된 음성의 하모닉 진폭 조절")
+
+    # 언어 코드 매핑 (확장)
+    lang_code_map = {
+        "Korean": "ko", "English": "en", "Japanese": "ja",
+        "Spanish": "es", "Portuguese": "pt", "German": "de",
+        "French": "fr", "Italian": "it", "Russian": "ru",
+        "Chinese": "zh", "Custom": "ko"  # 커스텀 보이스 기본값
+    }
     language_code = lang_code_map.get(voice.get("language", "English"), "en")
 
     return TTSSettings(
@@ -646,6 +833,10 @@ def render_settings_panel() -> Optional[TTSSettings]:
         pitch_shift=pitch_shift,
         pitch_variance=pitch_variance,
         speed=speed,
+        duration=duration,
+        similarity=similarity,
+        text_guidance=text_guidance,
+        subharmonic_amplitude_control=subharmonic,
         output_format="wav"
     )
 
@@ -853,31 +1044,53 @@ def main():
 
         if api_key:
             st.session_state.api_key = api_key
-            st.success("✅ API 키 설정됨")
+            client = SupertoneClient(api_key)
+
+            # 크레딧 잔액 표시
+            if st.session_state.get("credits") is None:
+                credits = client.get_credits()
+                if credits is not None:
+                    st.session_state.credits = credits
+
+            if st.session_state.get("credits") is not None:
+                st.metric("💰 크레딧", f"{st.session_state.credits:,.0f}")
 
             # API 키가 있고 보이스가 없으면 자동 로드
             if not st.session_state.get("api_voices"):
                 with st.spinner("보이스 로딩 중..."):
-                    client = SupertoneClient(api_key)
                     api_voices = client.get_voices()
+                    custom_voices = client.get_custom_voices()
                     if api_voices:
                         st.session_state.api_voices = api_voices
-                        st.rerun()
+                    if custom_voices:
+                        st.session_state.custom_voices = custom_voices
+                    st.rerun()
 
             # 로드된 보이스 수 표시
             voice_count = len(st.session_state.get("api_voices", []))
-            if voice_count > 0:
-                st.info(f"🎙️ {voice_count}개 보이스 로드됨")
+            custom_count = len(st.session_state.get("custom_voices", []))
 
-                # 새로고침 버튼
-                if st.button("🔄 보이스 새로고침", use_container_width=True):
-                    with st.spinner("새로고침 중..."):
-                        client = SupertoneClient(api_key)
-                        api_voices = client.get_voices()
-                        if api_voices:
-                            st.session_state.api_voices = api_voices
-                            st.success(f"✅ {len(api_voices)}개 로드 완료!")
-                            st.rerun()
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                st.info(f"🎙️ {voice_count}개")
+            with col_v2:
+                if custom_count > 0:
+                    st.success(f"🎤 커스텀 {custom_count}개")
+
+            # 새로고침 버튼
+            if st.button("🔄 새로고침", use_container_width=True):
+                with st.spinner("새로고침 중..."):
+                    api_voices = client.get_voices()
+                    custom_voices = client.get_custom_voices()
+                    credits = client.get_credits()
+                    if api_voices:
+                        st.session_state.api_voices = api_voices
+                    if custom_voices:
+                        st.session_state.custom_voices = custom_voices
+                    if credits is not None:
+                        st.session_state.credits = credits
+                    st.success(f"✅ {len(api_voices)}개 + 커스텀 {len(custom_voices)}개")
+                    st.rerun()
         else:
             st.warning("API 키를 입력해주세요")
 

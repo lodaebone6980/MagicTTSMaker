@@ -10,7 +10,7 @@ import aiohttp
 import io
 import time
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 import wave
 import zipfile
@@ -20,47 +20,44 @@ import zipfile
 SUPERTONE_API_BASE = "https://supertoneapi.com/v1"
 DEFAULT_RPM = 60
 
-# Sona 모델 버전
 SONA_MODELS = {
     "Sona 1": "sona_speech_1",
     "Sona 2": "sona_speech_2",
 }
 
-# 카테고리 목록
 CATEGORIES = [
     "All", "Meme", "Conversational", "Business", "Narration",
     "Announcement", "Education", "Game", "Storytelling", "Acting",
     "News", "Entertainment", "Humor"
 ]
 
-# 언어 목록
 LANGUAGES_FILTER = ["All", "Korean", "English", "Japanese"]
-LANGUAGE_MAP = {"Korean": "ko", "English": "en", "Japanese": "ja", "All": "all"}
-
-# 성별 목록
 GENDERS = ["All", "Male", "Female"]
-
-# 연령대 목록
 AGE_GROUPS = ["All", "Child", "Young-Adult", "Middle-Aged", "Senior"]
+
+# 캐릭터 이미지 (DiceBear Avatars API 사용)
+def get_avatar_url(name: str, gender: str = "Male") -> str:
+    style = "adventurer" if gender == "Male" else "adventurer"
+    return f"https://api.dicebear.com/7.x/{style}/svg?seed={name}&backgroundColor=b6e3f4,c0aede,d1d4f9"
 
 # ==================== Sample Voice Data ====================
 
 SAMPLE_VOICES = [
-    {"voice_id": "anderson", "name": "Anderson", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Storytelling"], "styles": ["neutral", "calm", "serious"], "description": "따뜻하고 신뢰감 있는 내레이션 음성", "is_new": True},
-    {"voice_id": "barbara", "name": "Barbara", "language": "English", "gender": "Female", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "professional"], "description": "전문적이고 명확한 아나운서 음성", "is_new": True},
-    {"voice_id": "daniel", "name": "Daniel", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "authoritative"], "description": "권위있고 신뢰감 있는 뉴스 음성", "is_new": True},
-    {"voice_id": "flop", "name": "Flop", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Game", "Entertainment"], "styles": ["neutral", "energetic", "playful"], "description": "활기차고 재미있는 게임 캐릭터 음성", "is_new": True},
-    {"voice_id": "hyunsook", "name": "Hyunsook", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "friendly", "cheerful"], "description": "밝고 친근한 엔터테인먼트 음성", "is_new": True},
-    {"voice_id": "juho", "name": "Juho", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "warm", "gentle"], "description": "따뜻하고 편안한 대화형 음성", "is_new": True},
-    {"voice_id": "kan", "name": "Kan", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Game", "Acting"], "styles": ["neutral", "dramatic", "intense"], "description": "드라마틱하고 강렬한 연기 음성", "is_new": True},
-    {"voice_id": "mansu", "name": "Mansu", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Humor", "Entertainment"], "styles": ["neutral", "funny", "sarcastic"], "description": "유머러스하고 재치있는 음성", "is_new": True},
-    {"voice_id": "oksoon", "name": "Oksoon", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "cute", "bright"], "description": "귀엽고 밝은 여성 음성", "is_new": True},
-    {"voice_id": "garret", "name": "Garret", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Business"], "styles": ["neutral", "professional", "calm"], "description": "차분하고 전문적인 한국어 남성 음성", "is_new": False},
-    {"voice_id": "minjae", "name": "민재", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "friendly"], "description": "친근하고 자연스러운 한국어 남성 음성", "is_new": False},
-    {"voice_id": "sooyoung", "name": "수영", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["Narration", "Entertainment"], "styles": ["neutral", "warm", "elegant"], "description": "우아하고 따뜻한 한국어 여성 음성", "is_new": False},
-    {"voice_id": "jiwon", "name": "지원", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["News", "Business"], "styles": ["neutral", "professional", "clear"], "description": "명확하고 전문적인 한국어 여성 음성", "is_new": False},
-    {"voice_id": "yuki", "name": "Yuki", "language": "Japanese", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Game"], "styles": ["neutral", "cute", "energetic"], "description": "귀엽고 활기찬 일본어 여성 음성", "is_new": False},
-    {"voice_id": "takeshi", "name": "Takeshi", "language": "Japanese", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Narration", "Business"], "styles": ["neutral", "serious", "professional"], "description": "진지하고 전문적인 일본어 남성 음성", "is_new": False},
+    {"voice_id": "preset_anderson", "name": "Anderson", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Storytelling"], "styles": ["neutral", "calm", "serious"], "description": "따뜻하고 신뢰감 있는 내레이션 음성", "is_new": True},
+    {"voice_id": "preset_barbara", "name": "Barbara", "language": "English", "gender": "Female", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "professional"], "description": "전문적이고 명확한 아나운서 음성", "is_new": True},
+    {"voice_id": "preset_daniel", "name": "Daniel", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["News", "Announcement"], "styles": ["neutral", "authoritative"], "description": "권위있고 신뢰감 있는 뉴스 음성", "is_new": True},
+    {"voice_id": "preset_flop", "name": "Flop", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Game", "Entertainment"], "styles": ["neutral", "energetic", "playful"], "description": "활기차고 재미있는 게임 캐릭터 음성", "is_new": True},
+    {"voice_id": "preset_hyunsook", "name": "Hyunsook", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "friendly", "cheerful"], "description": "밝고 친근한 엔터테인먼트 음성", "is_new": True},
+    {"voice_id": "preset_juho", "name": "Juho", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "warm", "gentle"], "description": "따뜻하고 편안한 대화형 음성", "is_new": True},
+    {"voice_id": "preset_kan", "name": "Kan", "language": "English", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Game", "Acting"], "styles": ["neutral", "dramatic", "intense"], "description": "드라마틱하고 강렬한 연기 음성", "is_new": True},
+    {"voice_id": "preset_mansu", "name": "Mansu", "language": "English", "gender": "Male", "age_group": "Young-Adult", "genres": ["Humor", "Entertainment"], "styles": ["neutral", "funny", "sarcastic"], "description": "유머러스하고 재치있는 음성", "is_new": True},
+    {"voice_id": "preset_oksoon", "name": "Oksoon", "language": "English", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Conversational"], "styles": ["neutral", "cute", "bright"], "description": "귀엽고 밝은 여성 음성", "is_new": True},
+    {"voice_id": "preset_garret", "name": "Garret", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Narration", "Business"], "styles": ["neutral", "professional", "calm"], "description": "차분하고 전문적인 한국어 남성 음성", "is_new": False},
+    {"voice_id": "preset_minjae", "name": "민재", "language": "Korean", "gender": "Male", "age_group": "Young-Adult", "genres": ["Conversational", "Education"], "styles": ["neutral", "friendly"], "description": "친근하고 자연스러운 한국어 남성 음성", "is_new": False},
+    {"voice_id": "preset_sooyoung", "name": "수영", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["Narration", "Entertainment"], "styles": ["neutral", "warm", "elegant"], "description": "우아하고 따뜻한 한국어 여성 음성", "is_new": False},
+    {"voice_id": "preset_jiwon", "name": "지원", "language": "Korean", "gender": "Female", "age_group": "Young-Adult", "genres": ["News", "Business"], "styles": ["neutral", "professional", "clear"], "description": "명확하고 전문적인 한국어 여성 음성", "is_new": False},
+    {"voice_id": "preset_yuki", "name": "Yuki", "language": "Japanese", "gender": "Female", "age_group": "Young-Adult", "genres": ["Entertainment", "Game"], "styles": ["neutral", "cute", "energetic"], "description": "귀엽고 활기찬 일본어 여성 음성", "is_new": False},
+    {"voice_id": "preset_takeshi", "name": "Takeshi", "language": "Japanese", "gender": "Male", "age_group": "Middle-Aged", "genres": ["Narration", "Business"], "styles": ["neutral", "serious", "professional"], "description": "진지하고 전문적인 일본어 남성 음성", "is_new": False},
 ]
 
 # ==================== Data Classes ====================
@@ -87,27 +84,12 @@ class TTSSettings:
     output_format: str = "wav"
 
 
-@dataclass
-class Voice:
-    voice_id: str
-    name: str
-    language: str
-    gender: str
-    age_group: str
-    genres: List[str]
-    styles: List[str]
-    description: str = ""
-    is_new: bool = False
-
-
 # ==================== Supertone API Client ====================
 
 class SupertoneClient:
     def __init__(self, api_key: str, rpm: int = DEFAULT_RPM):
         self.api_key = api_key
         self.rpm = rpm
-        self.request_interval = 60.0 / rpm
-        self.last_request_time = 0
 
     def get_headers(self) -> dict:
         return {
@@ -116,6 +98,7 @@ class SupertoneClient:
         }
 
     def get_voices(self) -> List[dict]:
+        """API에서 보이스 목록 가져오기"""
         try:
             response = requests.get(
                 f"{SUPERTONE_API_BASE}/voices",
@@ -123,9 +106,29 @@ class SupertoneClient:
                 timeout=30
             )
             if response.status_code == 200:
-                return response.json().get("voices", [])
-            return []
-        except Exception:
+                data = response.json()
+                voices = data.get("voices", [])
+                # API 응답 형식에 맞게 변환
+                formatted = []
+                for v in voices:
+                    formatted.append({
+                        "voice_id": v.get("voice_id", v.get("id", "")),
+                        "name": v.get("name", "Unknown"),
+                        "language": v.get("language", "English"),
+                        "gender": v.get("gender", "Unknown"),
+                        "age_group": v.get("age_group", v.get("age", "Unknown")),
+                        "genres": v.get("genres", v.get("tags", [])),
+                        "styles": v.get("styles", ["neutral"]),
+                        "description": v.get("description", ""),
+                        "is_new": v.get("is_new", False),
+                        "image_url": v.get("image_url", v.get("thumbnail", "")),
+                    })
+                return formatted
+            else:
+                st.error(f"보이스 목록 조회 실패: {response.status_code} - {response.text[:200]}")
+                return []
+        except Exception as e:
+            st.error(f"API 연결 오류: {str(e)}")
             return []
 
     async def generate_tts_async(
@@ -156,14 +159,16 @@ class SupertoneClient:
                     url,
                     headers=self.get_headers(),
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60)
+                    timeout=aiohttp.ClientTimeout(total=120)
                 ) as response:
                     if response.status == 200:
                         return await response.read(), ""
                     else:
                         error_text = await response.text()
-                        return None, f"API 오류: {response.status} - {error_text}"
+                        return None, f"[{response.status}] {error_text[:200]}"
 
+            except asyncio.TimeoutError:
+                return None, "요청 시간 초과 (120초)"
             except Exception as e:
                 return None, f"요청 실패: {str(e)}"
 
@@ -186,7 +191,6 @@ def split_text_into_blocks(text: str, max_chars: int = 300) -> List[str]:
             if current_block:
                 blocks.append(current_block.strip())
                 current_block = ""
-
             words = sentence.split()
             temp_block = ""
             for word in words:
@@ -232,9 +236,7 @@ def create_silence_bytes(duration_seconds: float, sample_rate: int, channels: in
 
 def merge_audio_blocks(
     audio_blocks: List[bytes],
-    word_gap_percent: float = 100.0,
-    sentence_gap_seconds: float = 0.5,
-    output_format: str = "wav"
+    sentence_gap_seconds: float = 0.5
 ) -> bytes:
     if not audio_blocks:
         return b""
@@ -253,9 +255,7 @@ def merge_audio_blocks(
         frames, sr, ch, sw = read_wav_data(audio_data)
         if frames is None:
             continue
-
         all_frames.append(frames)
-
         if i < len(valid_blocks) - 1 and sentence_gap_seconds > 0:
             silence = create_silence_bytes(sentence_gap_seconds, sample_rate, channels, sample_width)
             all_frames.append(silence)
@@ -330,7 +330,6 @@ async def process_single_block(
 # ==================== Voice Library UI ====================
 
 def get_voices_list() -> List[Dict]:
-    """보이스 목록 반환 (API 또는 샘플 데이터)"""
     if "api_voices" in st.session_state and st.session_state.api_voices:
         return st.session_state.api_voices
     return SAMPLE_VOICES
@@ -344,21 +343,16 @@ def filter_voices(
     age_group: str = "All",
     search_query: str = ""
 ) -> List[Dict]:
-    """보이스 필터링"""
     filtered = voices
 
     if category != "All":
         filtered = [v for v in filtered if category in v.get("genres", [])]
-
     if language != "All":
         filtered = [v for v in filtered if v.get("language") == language]
-
     if gender != "All":
         filtered = [v for v in filtered if v.get("gender") == gender]
-
     if age_group != "All":
         filtered = [v for v in filtered if v.get("age_group") == age_group]
-
     if search_query:
         query = search_query.lower()
         filtered = [v for v in filtered if
@@ -368,107 +362,94 @@ def filter_voices(
     return filtered
 
 
-def render_voice_card(voice: Dict, col) -> bool:
-    """보이스 카드 렌더링 - 선택되면 True 반환"""
-    with col:
-        # 카드 스타일 컨테이너
-        is_selected = st.session_state.get("selected_voice_id") == voice.get("voice_id")
+def render_voice_row(voice: Dict, index: int) -> bool:
+    """테이블 행 형태로 보이스 렌더링"""
+    cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
 
-        card_style = "border: 2px solid #00D26A;" if is_selected else "border: 1px solid #444;"
+    with cols[0]:
+        # 캐릭터 이미지
+        img_url = voice.get("image_url") or get_avatar_url(voice.get("name", "User"), voice.get("gender", "Male"))
+        st.image(img_url, width=50)
 
-        with st.container():
-            # 이름과 NEW 뱃지
-            name_col, badge_col = st.columns([3, 1])
-            with name_col:
-                st.markdown(f"**{voice.get('name', 'Unknown')}**")
-            with badge_col:
-                if voice.get("is_new"):
-                    st.markdown('<span style="background-color: #00D26A; color: black; padding: 2px 6px; border-radius: 4px; font-size: 10px;">NEW</span>', unsafe_allow_html=True)
+    with cols[1]:
+        # 이름 + NEW 뱃지
+        name = voice.get("name", "Unknown")
+        if voice.get("is_new"):
+            st.markdown(f"**{name}** <span style='background:#00D26A;color:#000;padding:2px 6px;border-radius:4px;font-size:11px;margin-left:5px;'>NEW</span>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"**{name}**")
 
-            # 정보
-            st.caption(f"🌐 {voice.get('language', '-')} | 👤 {voice.get('gender', '-')} | 📅 {voice.get('age_group', '-')}")
+    with cols[2]:
+        st.caption(voice.get("language", "-"))
 
-            # 장르
-            genres = voice.get("genres", [])
-            if genres:
-                st.caption(f"🎭 {', '.join(genres[:2])}{'...' if len(genres) > 2 else ''}")
+    with cols[3]:
+        st.caption(voice.get("gender", "-"))
 
-            # 설명
-            desc = voice.get("description", "")
-            if desc:
-                st.caption(f"_{desc[:40]}{'...' if len(desc) > 40 else ''}_")
+    with cols[4]:
+        st.caption(voice.get("age_group", "-"))
 
-            # 선택 버튼
-            if st.button("선택", key=f"select_{voice.get('voice_id')}", use_container_width=True):
-                return True
+    with cols[5]:
+        genres = voice.get("genres", [])
+        st.caption(", ".join(genres[:2]) + ("..." if len(genres) > 2 else ""))
+
+    with cols[6]:
+        if st.button("선택", key=f"sel_voice_{index}_{voice.get('voice_id')}", type="primary", use_container_width=True):
+            return True
 
     return False
 
 
 def render_voice_library():
-    """보이스 라이브러리 팝업 렌더링"""
+    """보이스 라이브러리 - 테이블 형태"""
 
     st.subheader("🎙️ 보이스 라이브러리")
 
     voices = get_voices_list()
 
-    # 검색 및 필터
+    # 검색 및 새로고침
     search_col, refresh_col = st.columns([4, 1])
     with search_col:
-        search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search")
+        search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search", label_visibility="collapsed")
     with refresh_col:
-        if st.button("🔄", help="API에서 보이스 목록 새로고침"):
-            if "api_key" in st.session_state and st.session_state.api_key:
+        if st.button("🔄 새로고침", use_container_width=True):
+            if st.session_state.get("api_key"):
                 client = SupertoneClient(st.session_state.api_key)
                 api_voices = client.get_voices()
                 if api_voices:
                     st.session_state.api_voices = api_voices
                     st.success(f"✅ {len(api_voices)}개 보이스 로드됨")
                     st.rerun()
+                else:
+                    st.warning("API에서 보이스를 가져올 수 없습니다")
 
-    # 카테고리 필터 (탭 스타일)
+    # 카테고리 필터 (가로 버튼)
     st.markdown("##### 카테고리")
-    category_cols = st.columns(7)
+    cat_cols = st.columns(len(CATEGORIES))
     selected_category = st.session_state.get("filter_category", "All")
 
-    for i, cat in enumerate(CATEGORIES[:7]):
-        with category_cols[i]:
-            if st.button(cat, key=f"cat_{cat}",
-                        type="primary" if selected_category == cat else "secondary",
-                        use_container_width=True):
+    for i, cat in enumerate(CATEGORIES):
+        with cat_cols[i]:
+            btn_type = "primary" if selected_category == cat else "secondary"
+            if st.button(cat, key=f"cat_{cat}", type=btn_type, use_container_width=True):
                 st.session_state.filter_category = cat
                 st.rerun()
 
-    # 더 많은 카테고리
-    if len(CATEGORIES) > 7:
-        category_cols2 = st.columns(7)
-        for i, cat in enumerate(CATEGORIES[7:]):
-            with category_cols2[i]:
-                if st.button(cat, key=f"cat_{cat}",
-                            type="primary" if selected_category == cat else "secondary",
-                            use_container_width=True):
-                    st.session_state.filter_category = cat
-                    st.rerun()
-
     # 필터 드롭다운
-    filter_cols = st.columns(4)
+    filter_cols = st.columns([1, 1, 1, 1])
     with filter_cols[0]:
-        selected_language = st.selectbox("🌐 언어", LANGUAGES_FILTER, key="filter_language")
+        selected_language = st.selectbox("🌐 언어", LANGUAGES_FILTER, key="filter_language", label_visibility="collapsed")
     with filter_cols[1]:
-        selected_gender = st.selectbox("👤 성별", GENDERS, key="filter_gender")
+        selected_gender = st.selectbox("👤 성별", GENDERS, key="filter_gender", label_visibility="collapsed")
     with filter_cols[2]:
-        selected_age = st.selectbox("📅 연령대", AGE_GROUPS, key="filter_age")
+        selected_age = st.selectbox("📅 연령대", AGE_GROUPS, key="filter_age", label_visibility="collapsed")
     with filter_cols[3]:
         if st.button("필터 초기화", use_container_width=True):
             st.session_state.filter_category = "All"
-            st.session_state.filter_language = "All"
-            st.session_state.filter_gender = "All"
-            st.session_state.filter_age = "All"
             st.rerun()
 
     st.divider()
 
-    # 필터링된 보이스 목록
+    # 필터링
     filtered_voices = filter_voices(
         voices,
         category=st.session_state.get("filter_category", "All"),
@@ -480,21 +461,39 @@ def render_voice_library():
 
     st.markdown(f"**전체 보이스 ({len(filtered_voices)})**")
 
-    # 보이스 카드 그리드
+    # 테이블 헤더
+    header_cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
+    with header_cols[0]:
+        st.caption("")
+    with header_cols[1]:
+        st.caption("**이름**")
+    with header_cols[2]:
+        st.caption("**언어**")
+    with header_cols[3]:
+        st.caption("**성별**")
+    with header_cols[4]:
+        st.caption("**연령대**")
+    with header_cols[5]:
+        st.caption("**장르**")
+    with header_cols[6]:
+        st.caption("")
+
+    st.divider()
+
+    # 보이스 목록 (테이블 행)
     if not filtered_voices:
         st.info("조건에 맞는 보이스가 없습니다.")
     else:
-        # 3열 그리드
-        for i in range(0, len(filtered_voices), 3):
-            cols = st.columns(3)
-            for j, col in enumerate(cols):
-                if i + j < len(filtered_voices):
-                    voice = filtered_voices[i + j]
-                    if render_voice_card(voice, col):
-                        st.session_state.selected_voice = voice
-                        st.session_state.selected_voice_id = voice.get("voice_id")
-                        st.session_state.show_voice_library = False
-                        st.rerun()
+        for i, voice in enumerate(filtered_voices):
+            if render_voice_row(voice, i):
+                st.session_state.selected_voice = voice
+                st.session_state.selected_voice_id = voice.get("voice_id")
+                st.session_state.show_voice_library = False
+                st.rerun()
+
+            # 구분선 (매 행마다)
+            if i < len(filtered_voices) - 1:
+                st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
 
 # ==================== Streamlit UI ====================
@@ -525,8 +524,14 @@ def render_voice_selector():
     with col1:
         if st.session_state.selected_voice:
             voice = st.session_state.selected_voice
-            st.success(f"✅ **{voice.get('name')}** ({voice.get('language')}, {voice.get('gender')})")
-            st.caption(voice.get("description", ""))
+            # 이미지와 정보 함께 표시
+            img_col, info_col = st.columns([0.15, 0.85])
+            with img_col:
+                img_url = voice.get("image_url") or get_avatar_url(voice.get("name", ""), voice.get("gender", "Male"))
+                st.image(img_url, width=60)
+            with info_col:
+                st.success(f"**{voice.get('name')}** ({voice.get('language')}, {voice.get('gender')})")
+                st.caption(voice.get("description", ""))
         else:
             st.warning("보이스를 선택해주세요")
 
@@ -537,9 +542,8 @@ def render_voice_selector():
 
 
 def render_settings_panel() -> Optional[TTSSettings]:
-    """설정 패널 렌더링"""
+    """설정 패널"""
 
-    # 보이스 선택 버튼
     render_voice_selector()
 
     if not st.session_state.selected_voice:
@@ -552,16 +556,12 @@ def render_settings_panel() -> Optional[TTSSettings]:
     col1, col2 = st.columns(2)
 
     with col1:
-        # 스타일 선택
         styles = voice.get("styles", ["neutral"])
         style = st.selectbox("🎭 말투 (스타일)", styles, key="voice_style")
-
-        # 모델 선택
-        model_name = st.selectbox("🤖 Sona 모델", list(SONA_MODELS.keys()), index=1, key="sona_model")
+        model_name = st.selectbox("🤖 Sona 모델", list(SONA_MODELS.keys()), index=0, key="sona_model")
         model = SONA_MODELS[model_name]
 
     with col2:
-        # RPM 설정
         rpm = st.number_input("⚡ RPM", min_value=1, max_value=1000, value=DEFAULT_RPM, key="rpm_setting")
 
     st.divider()
@@ -570,15 +570,12 @@ def render_settings_panel() -> Optional[TTSSettings]:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift", help="Pitch Shift")
-
+        pitch_shift = st.slider("음높이", -24.0, 24.0, 0.0, 0.5, key="pitch_shift")
     with col2:
-        pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance", help="Pitch Variance")
-
+        pitch_variance = st.slider("음높이 변화", 0.0, 2.0, 1.0, 0.1, key="pitch_variance")
     with col3:
-        speed = st.slider("속도", 0.5, 2.0, 1.0, 0.1, key="speed", help="Speed")
+        speed = st.slider("속도", 0.5, 2.0, 1.0, 0.1, key="speed")
 
-    # 언어 코드 매핑
     lang_code_map = {"Korean": "ko", "English": "en", "Japanese": "ja"}
     language_code = lang_code_map.get(voice.get("language", "English"), "en")
 
@@ -643,14 +640,18 @@ def render_process_section(client: SupertoneClient, settings: TTSSettings, block
 
             progress_bar = st.progress(0)
             status_text = st.empty()
+            error_container = st.empty()
 
             completed = [0]
+            errors = []
             total = len(blocks)
 
             def update_progress(block: TTSBlock):
                 completed[0] += 1
                 progress_bar.progress(completed[0] / total)
                 status_text.text(f"처리 중: {completed[0]}/{total}")
+                if block.status == "error":
+                    errors.append(f"블록 {block.index + 1}: {block.error_message}")
 
             with st.spinner(f"🔄 {len(blocks)}개 블록 병렬 처리 중..."):
                 loop = asyncio.new_event_loop()
@@ -670,7 +671,12 @@ def render_process_section(client: SupertoneClient, settings: TTSSettings, block
             if error_count == 0:
                 st.success(f"✅ 모든 블록 처리 완료! ({completed_count}개)")
             else:
-                st.warning(f"⚠️ 성공: {completed_count}개, 실패: {error_count}개")
+                st.error(f"⚠️ 성공: {completed_count}개, 실패: {error_count}개")
+                # 에러 상세 표시
+                with st.expander("❌ 에러 상세 보기"):
+                    for b in st.session_state.blocks:
+                        if b.status == "error":
+                            st.error(f"**블록 {b.index + 1}**: {b.error_message}")
 
             st.rerun()
 
@@ -682,12 +688,23 @@ def render_results():
         return
 
     completed_blocks = [b for b in st.session_state.blocks if b.status == "completed"]
+    error_blocks = [b for b in st.session_state.blocks if b.status == "error"]
 
-    if not completed_blocks:
+    if not completed_blocks and not error_blocks:
         return
 
     st.divider()
     st.markdown("##### 📥 결과 및 다운로드")
+
+    # 에러가 있으면 표시
+    if error_blocks:
+        with st.expander(f"❌ 실패한 블록 ({len(error_blocks)}개)", expanded=False):
+            for b in error_blocks:
+                st.error(f"블록 {b.index + 1}: {b.error_message}")
+
+    if not completed_blocks:
+        st.warning("성공적으로 생성된 오디오가 없습니다.")
+        return
 
     # 선택 컨트롤
     select_all = st.checkbox("모두 선택", value=True, key="select_all")
@@ -723,7 +740,6 @@ def render_results():
 
     with col1:
         st.markdown("**병합 설정**")
-        word_gap = st.slider("단어 간격 (%)", 50, 200, 100, 10, key="word_gap")
         sentence_gap = st.slider("문장 간격 (초)", 0.0, 3.0, 0.5, 0.1, key="sentence_gap")
 
     with col2:
@@ -737,14 +753,12 @@ def render_results():
         if selected_completed:
             audio_list = [b.audio_data for b in selected_completed if b.audio_data]
 
-            # 병합 오디오 다운로드
-            merged = merge_audio_blocks(audio_list, word_gap, sentence_gap)
+            merged = merge_audio_blocks(audio_list, sentence_gap)
             if merged:
                 st.download_button("🎵 병합 오디오 다운로드", merged,
                                   f"tts_merged_{int(time.time())}.wav", "audio/wav",
                                   use_container_width=True)
 
-            # ZIP 다운로드
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for block in selected_completed:
@@ -755,7 +769,6 @@ def render_results():
                               f"tts_blocks_{int(time.time())}.zip", "application/zip",
                               use_container_width=True)
 
-        # 텍스트 다운로드
         if st.session_state.selected_blocks:
             texts = [st.session_state.blocks[i].text for i in sorted(st.session_state.selected_blocks)
                     if i < len(st.session_state.blocks)]
@@ -801,11 +814,9 @@ def main():
             st.session_state.show_voice_library = False
             st.rerun()
     else:
-        # 일반 UI
         if not st.session_state.api_key:
             st.info("👈 사이드바에서 API 키를 입력해주세요")
 
-            # 샘플 데이터로 보이스 라이브러리 미리보기 가능
             st.divider()
             st.markdown("### 🎙️ 보이스 라이브러리 미리보기")
             st.caption("API 키 없이도 보이스 목록을 확인할 수 있습니다 (샘플 데이터)")
@@ -817,17 +828,12 @@ def main():
 
         client = SupertoneClient(st.session_state.api_key, st.session_state.get("rpm_setting", DEFAULT_RPM))
 
-        # 설정 패널
         settings = render_settings_panel()
-
-        # 스크립트 입력
         blocks = render_script_input()
 
-        # TTS 생성
         if settings and blocks:
             render_process_section(client, settings, blocks)
 
-        # 결과
         render_results()
 
 

@@ -391,20 +391,18 @@ def filter_voices(
     return filtered
 
 
-def render_voice_row(voice: Dict, index) -> bool:
-    """테이블 행 형태로 보이스 렌더링 (index는 int 또는 str)"""
-    cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
+def render_voice_row_dialog(voice: Dict, index) -> bool:
+    """다이얼로그용 보이스 행 렌더링"""
+    cols = st.columns([0.6, 2, 1, 0.8, 1, 1.5, 0.8])
 
     with cols[0]:
-        # 캐릭터 이미지
         img_url = voice.get("image_url") or get_avatar_url(voice.get("name", "User"), voice.get("gender", "Male"))
-        st.image(img_url, width=50)
+        st.image(img_url, width=40)
 
     with cols[1]:
-        # 이름 + NEW 뱃지
         name = voice.get("name", "Unknown")
         if voice.get("is_new"):
-            st.markdown(f"**{name}** <span style='background:#00D26A;color:#000;padding:2px 6px;border-radius:4px;font-size:11px;margin-left:5px;'>NEW</span>", unsafe_allow_html=True)
+            st.markdown(f"**{name}** <span style='background:#00D26A;color:#000;padding:1px 4px;border-radius:3px;font-size:10px;'>NEW</span>", unsafe_allow_html=True)
         else:
             st.markdown(f"**{name}**")
 
@@ -422,156 +420,98 @@ def render_voice_row(voice: Dict, index) -> bool:
         st.caption(", ".join(genres[:2]) + ("..." if len(genres) > 2 else ""))
 
     with cols[6]:
-        if st.button("선택", key=f"sel_voice_{index}_{voice.get('voice_id')}", type="primary", use_container_width=True):
+        if st.button("선택", key=f"dlg_sel_{index}_{voice.get('voice_id')}", type="primary"):
             return True
 
     return False
 
 
-def render_recent_voices_section():
-    """최근 사용한 보이스 섹션"""
-    recent = st.session_state.get("recent_voices", [])
-
-    if not recent:
-        return False
-
-    st.markdown("##### ⏱️ 최근 사용한 보이스")
-
-    # 최근 보이스 테이블 헤더
-    header_cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
-    with header_cols[1]:
-        st.caption("**이름**")
-    with header_cols[2]:
-        st.caption("**언어**")
-    with header_cols[3]:
-        st.caption("**성별**")
-    with header_cols[4]:
-        st.caption("**연령대**")
-    with header_cols[5]:
-        st.caption("**장르**")
-
-    # 최근 사용 보이스 목록
-    for i, voice in enumerate(recent[:5]):  # 최대 5개만 표시
-        if render_voice_row(voice, f"recent_{i}"):
-            st.session_state.selected_voice = voice
-            st.session_state.selected_voice_id = voice.get("voice_id")
-            st.session_state.show_voice_library = False
-            add_to_recent_voices(voice)
-            st.rerun()
-
-        if i < min(len(recent), 5) - 1:
-            st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
-
-    st.divider()
-    return True
-
-
-def render_voice_library():
-    """보이스 라이브러리 - 테이블 형태"""
-
-    st.subheader("🎙️ 보이스 라이브러리")
-
-    # 최근 사용한 보이스 섹션 표시
-    render_recent_voices_section()
+@st.dialog("🎙️ 보이스 라이브러리", width="large")
+def voice_library_dialog():
+    """보이스 라이브러리 팝업 다이얼로그"""
 
     voices = get_voices_list()
 
+    # 최근 사용한 보이스
+    recent = st.session_state.get("recent_voices", [])
+    if recent:
+        st.markdown("##### ⏱️ 최근 사용한 보이스")
+        for i, voice in enumerate(recent[:3]):
+            if render_voice_row_dialog(voice, f"recent_{i}"):
+                st.session_state.selected_voice = voice
+                st.session_state.selected_voice_id = voice.get("voice_id")
+                add_to_recent_voices(voice)
+                st.rerun()
+        st.divider()
+
     # 샘플 데이터 경고
     if not st.session_state.get("api_voices"):
-        st.warning("⚠️ **샘플 데이터입니다.** 실제 TTS 생성을 위해 아래 '🔄 API에서 보이스 불러오기' 버튼을 클릭하세요.")
+        st.warning("⚠️ **샘플 데이터** - 'API에서 불러오기' 클릭 필요")
 
-    # API에서 보이스 불러오기 버튼 (눈에 띄게)
+    # API에서 보이스 불러오기
     if st.session_state.get("api_key"):
-        if st.button("🔄 API에서 보이스 불러오기 (실제 캐릭터 이미지 + voice_id)", type="primary", use_container_width=True):
-            with st.spinner("API에서 보이스 목록을 가져오는 중..."):
+        if st.button("🔄 API에서 보이스 불러오기", type="primary", use_container_width=True, key="dlg_load_api"):
+            with st.spinner("로딩 중..."):
                 client = SupertoneClient(st.session_state.api_key)
                 api_voices = client.get_voices()
                 if api_voices:
                     st.session_state.api_voices = api_voices
-                    st.success(f"✅ {len(api_voices)}개 보이스 로드 완료!")
+                    st.success(f"✅ {len(api_voices)}개 로드!")
                     st.rerun()
                 else:
-                    st.error("API에서 보이스를 가져올 수 없습니다. API 키를 확인해주세요.")
-    else:
-        st.info("👈 사이드바에서 API 키를 입력하면 실제 보이스를 불러올 수 있습니다.")
+                    st.error("API 오류")
 
-    # 검색
-    search_query = st.text_input("🔍 보이스 검색", placeholder="이름 또는 설명으로 검색...", key="voice_search")
+    # 검색 및 필터
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    with col1:
+        search_query = st.text_input("🔍 검색", placeholder="이름...", key="dlg_search", label_visibility="collapsed")
+    with col2:
+        selected_language = st.selectbox("언어", LANGUAGES_FILTER, key="dlg_lang", label_visibility="collapsed")
+    with col3:
+        selected_gender = st.selectbox("성별", GENDERS, key="dlg_gender", label_visibility="collapsed")
+    with col4:
+        selected_age = st.selectbox("연령대", AGE_GROUPS, key="dlg_age", label_visibility="collapsed")
 
-    # 카테고리 필터 (가로 버튼)
-    st.markdown("##### 카테고리")
-    cat_cols = st.columns(len(CATEGORIES))
-    selected_category = st.session_state.get("filter_category", "All")
-
-    for i, cat in enumerate(CATEGORIES):
+    # 카테고리 (간소화)
+    selected_category = st.session_state.get("dlg_filter_category", "All")
+    cat_cols = st.columns(7)
+    short_cats = ["All", "Meme", "Narration", "Game", "News", "Business", "Entertainment"]
+    for i, cat in enumerate(short_cats):
         with cat_cols[i]:
             btn_type = "primary" if selected_category == cat else "secondary"
-            if st.button(cat, key=f"cat_{cat}", type=btn_type, use_container_width=True):
-                st.session_state.filter_category = cat
+            if st.button(cat, key=f"dlg_cat_{cat}", type=btn_type, use_container_width=True):
+                st.session_state.dlg_filter_category = cat
                 st.rerun()
-
-    # 필터 드롭다운
-    filter_cols = st.columns([1, 1, 1, 1])
-    with filter_cols[0]:
-        selected_language = st.selectbox("🌐 언어", LANGUAGES_FILTER, key="filter_language", label_visibility="collapsed")
-    with filter_cols[1]:
-        selected_gender = st.selectbox("👤 성별", GENDERS, key="filter_gender", label_visibility="collapsed")
-    with filter_cols[2]:
-        selected_age = st.selectbox("📅 연령대", AGE_GROUPS, key="filter_age", label_visibility="collapsed")
-    with filter_cols[3]:
-        if st.button("필터 초기화", use_container_width=True):
-            st.session_state.filter_category = "All"
-            st.rerun()
-
-    st.divider()
 
     # 필터링
     filtered_voices = filter_voices(
         voices,
-        category=st.session_state.get("filter_category", "All"),
+        category=selected_category,
         language=selected_language,
         gender=selected_gender,
         age_group=selected_age,
         search_query=search_query
     )
 
-    st.markdown(f"**전체 보이스 ({len(filtered_voices)})**")
+    st.caption(f"**{len(filtered_voices)}개 보이스**")
 
-    # 테이블 헤더
-    header_cols = st.columns([0.8, 2.5, 1.2, 1, 1.2, 2, 1])
-    with header_cols[0]:
-        st.caption("")
-    with header_cols[1]:
-        st.caption("**이름**")
-    with header_cols[2]:
-        st.caption("**언어**")
-    with header_cols[3]:
-        st.caption("**성별**")
-    with header_cols[4]:
-        st.caption("**연령대**")
-    with header_cols[5]:
-        st.caption("**장르**")
-    with header_cols[6]:
-        st.caption("")
-
-    st.divider()
-
-    # 보이스 목록 (테이블 행)
+    # 보이스 목록 (스크롤 가능한 컨테이너)
     if not filtered_voices:
         st.info("조건에 맞는 보이스가 없습니다.")
     else:
-        for i, voice in enumerate(filtered_voices):
-            if render_voice_row(voice, i):
+        # 최대 50개까지만 표시 (성능)
+        for i, voice in enumerate(filtered_voices[:50]):
+            if render_voice_row_dialog(voice, i):
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
-                st.session_state.show_voice_library = False
-                # 최근 사용 보이스에 추가
                 add_to_recent_voices(voice)
                 st.rerun()
 
-            # 구분선 (매 행마다)
-            if i < len(filtered_voices) - 1:
-                st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
+            if i < min(len(filtered_voices), 50) - 1:
+                st.markdown("<hr style='margin: 3px 0; border: none; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
+
+        if len(filtered_voices) > 50:
+            st.info(f"... 외 {len(filtered_voices) - 50}개 더 있음 (검색으로 좁혀주세요)")
 
 
 # ==================== Streamlit UI ====================
@@ -584,8 +524,6 @@ def init_session_state():
         "selected_blocks": set(),
         "selected_voice": None,
         "selected_voice_id": None,
-        "show_voice_library": False,
-        "filter_category": "All",
         "api_key": "",
         "recent_voices": [],  # 최근 사용한 보이스 목록 (최대 10개)
     }
@@ -627,7 +565,7 @@ def render_voice_selector():
             voice = st.session_state.selected_voice
             # 샘플 데이터 경고
             if voice.get("voice_id", "").startswith("preset_"):
-                st.error("⚠️ 샘플 보이스입니다. 보이스 라이브러리에서 'API에서 보이스 불러오기' 버튼을 눌러 실제 보이스를 선택해주세요.")
+                st.error("⚠️ 샘플 보이스입니다. 팝업에서 'API에서 보이스 불러오기' 버튼을 눌러 실제 보이스를 선택해주세요.")
             else:
                 # 이미지와 정보 함께 표시
                 img_col, info_col = st.columns([0.15, 0.85])
@@ -642,8 +580,7 @@ def render_voice_selector():
 
     with col2:
         if st.button("🎙️ 보이스 선택", use_container_width=True, type="primary"):
-            st.session_state.show_voice_library = True
-            st.rerun()
+            voice_library_dialog()
 
 
 def render_settings_panel() -> Optional[TTSSettings]:
@@ -915,35 +852,26 @@ def main():
     # 메인 컨텐츠
     st.title("🎙️ Supertone TTS 병렬 처리기")
 
-    # 보이스 라이브러리 표시
-    if st.session_state.show_voice_library:
-        render_voice_library()
+    if not st.session_state.api_key:
+        st.info("👈 사이드바에서 API 키를 입력해주세요")
 
-        if st.button("← 돌아가기", use_container_width=False):
-            st.session_state.show_voice_library = False
-            st.rerun()
-    else:
-        if not st.session_state.api_key:
-            st.info("👈 사이드바에서 API 키를 입력해주세요")
+        st.divider()
+        st.markdown("### 🎙️ 보이스 미리보기")
+        st.caption("API 키 없이도 보이스 목록을 확인할 수 있습니다 (샘플 데이터)")
 
-            st.divider()
-            st.markdown("### 🎙️ 보이스 라이브러리 미리보기")
-            st.caption("API 키 없이도 보이스 목록을 확인할 수 있습니다 (샘플 데이터)")
+        if st.button("🎙️ 보이스 라이브러리 열기", type="primary"):
+            voice_library_dialog()
+        return
 
-            if st.button("보이스 라이브러리 열기", type="primary"):
-                st.session_state.show_voice_library = True
-                st.rerun()
-            return
+    client = SupertoneClient(st.session_state.api_key, st.session_state.get("rpm_setting", DEFAULT_RPM))
 
-        client = SupertoneClient(st.session_state.api_key, st.session_state.get("rpm_setting", DEFAULT_RPM))
+    settings = render_settings_panel()
+    blocks = render_script_input()
 
-        settings = render_settings_panel()
-        blocks = render_script_input()
+    if settings and blocks:
+        render_process_section(client, settings, blocks)
 
-        if settings and blocks:
-            render_process_section(client, settings, blocks)
-
-        render_results()
+    render_results()
 
 
 if __name__ == "__main__":

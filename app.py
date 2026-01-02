@@ -10,7 +10,9 @@ import aiohttp
 import io
 import time
 import re
-from dataclasses import dataclass
+import json
+import base64
+from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple, Dict
 import wave
 import zipfile
@@ -547,39 +549,48 @@ def filter_voices(
     return filtered
 
 
-def render_voice_row_dialog(voice: Dict, index) -> bool:
-    """다이얼로그용 보이스 행 렌더링"""
-    cols = st.columns([0.6, 2, 1, 0.8, 1, 1.5, 0.8])
+def render_voice_row_dialog(voice: Dict, index, show_fav_btn: bool = True) -> Tuple[bool, bool]:
+    """다이얼로그용 보이스 행 렌더링. Returns (selected, fav_toggled)"""
+    voice_id = voice.get("voice_id", "")
+    is_fav = is_favorite_voice(voice_id)
 
+    cols = st.columns([0.5, 0.6, 2, 0.8, 0.8, 1.2, 0.8])
+
+    fav_toggled = False
     with cols[0]:
+        fav_icon = "⭐" if is_fav else "☆"
+        if show_fav_btn and st.button(fav_icon, key=f"fav_{index}_{voice_id}", help="즐겨찾기"):
+            toggle_favorite_voice(voice_id)
+            fav_toggled = True
+
+    with cols[1]:
         img_url = voice.get("image_url") or get_avatar_url(voice.get("name", "User"), voice.get("gender", "Male"))
         st.image(img_url, width=40)
 
-    with cols[1]:
+    with cols[2]:
         name = voice.get("name", "Unknown")
         if voice.get("is_new"):
             st.markdown(f"**{name}** <span style='background:#00D26A;color:#000;padding:1px 4px;border-radius:3px;font-size:10px;'>NEW</span>", unsafe_allow_html=True)
+        elif voice.get("is_custom"):
+            st.markdown(f"**{name}** <span style='background:#FF6B6B;color:#fff;padding:1px 4px;border-radius:3px;font-size:10px;'>CUSTOM</span>", unsafe_allow_html=True)
         else:
             st.markdown(f"**{name}**")
 
-    with cols[2]:
+    with cols[3]:
         st.caption(voice.get("language", "-"))
 
-    with cols[3]:
-        st.caption(voice.get("gender", "-"))
-
     with cols[4]:
-        st.caption(voice.get("age_group", "-"))
+        st.caption(voice.get("gender", "-"))
 
     with cols[5]:
         genres = voice.get("genres", [])
         st.caption(", ".join(genres[:2]) + ("..." if len(genres) > 2 else ""))
 
     with cols[6]:
-        if st.button("선택", key=f"dlg_sel_{index}_{voice.get('voice_id')}", type="primary"):
-            return True
+        if st.button("선택", key=f"dlg_sel_{index}_{voice_id}", type="primary"):
+            return True, fav_toggled
 
-    return False
+    return False, fav_toggled
 
 
 @st.dialog("📥 다운로드 설정", width="small")
@@ -648,12 +659,31 @@ def voice_library_dialog():
 
     voices = get_voices_list()
 
+    # 즐겨찾기 보이스
+    favorite_ids = st.session_state.get("favorite_voice_ids", [])
+    favorite_voices = [v for v in voices if v.get("voice_id") in favorite_ids]
+    if favorite_voices:
+        st.markdown("##### ⭐ 즐겨찾기 보이스")
+        for i, voice in enumerate(favorite_voices[:5]):
+            selected, fav_toggled = render_voice_row_dialog(voice, f"fav_{i}")
+            if fav_toggled:
+                st.rerun()
+            if selected:
+                st.session_state.selected_voice = voice
+                st.session_state.selected_voice_id = voice.get("voice_id")
+                add_to_recent_voices(voice)
+                st.rerun()
+        st.divider()
+
     # 최근 사용한 보이스
     recent = st.session_state.get("recent_voices", [])
     if recent:
         st.markdown("##### ⏱️ 최근 사용한 보이스")
         for i, voice in enumerate(recent[:3]):
-            if render_voice_row_dialog(voice, f"recent_{i}"):
+            selected, fav_toggled = render_voice_row_dialog(voice, f"recent_{i}")
+            if fav_toggled:
+                st.rerun()
+            if selected:
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
                 add_to_recent_voices(voice)
@@ -720,7 +750,10 @@ def voice_library_dialog():
 
         for i, voice in enumerate(page_voices):
             global_idx = start_idx + i
-            if render_voice_row_dialog(voice, global_idx):
+            selected, fav_toggled = render_voice_row_dialog(voice, global_idx)
+            if fav_toggled:
+                st.rerun()
+            if selected:
                 st.session_state.selected_voice = voice
                 st.session_state.selected_voice_id = voice.get("voice_id")
                 add_to_recent_voices(voice)
@@ -749,6 +782,10 @@ def init_session_state():
         # 기본 간격 설정
         "default_word_gap": 0.0,  # 단어 사이 간격 (초)
         "default_sentence_gap": 0.5,  # 문장 사이 간격 (초)
+        # 즐겨찾기 보이스 목록
+        "favorite_voice_ids": [],  # [voice_id, ...]
+        # 프로젝트 설정
+        "project_name": "새 프로젝트",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -775,6 +812,184 @@ def add_to_recent_voices(voice: Dict):
 
     # 최대 10개 유지
     st.session_state.recent_voices = st.session_state.recent_voices[:10]
+
+
+def toggle_favorite_voice(voice_id: str):
+    """보이스 즐겨찾기 토글"""
+    if voice_id in st.session_state.favorite_voice_ids:
+        st.session_state.favorite_voice_ids.remove(voice_id)
+    else:
+        st.session_state.favorite_voice_ids.append(voice_id)
+
+
+def is_favorite_voice(voice_id: str) -> bool:
+    """보이스가 즐겨찾기인지 확인"""
+    return voice_id in st.session_state.favorite_voice_ids
+
+
+# ==================== Project Save/Load ====================
+
+def save_project_to_json() -> str:
+    """현재 프로젝트를 JSON으로 저장"""
+    project_data = {
+        "version": "1.0",
+        "project_name": st.session_state.get("project_name", "새 프로젝트"),
+        "selected_voice": st.session_state.get("selected_voice"),
+        "selected_voice_id": st.session_state.get("selected_voice_id"),
+        "script_input": st.session_state.get("script_input", ""),
+        "max_chars": st.session_state.get("max_chars", 300),
+        "voice_style": st.session_state.get("voice_style", "neutral"),
+        "sona_model": st.session_state.get("sona_model", "Sona 1"),
+        "tts_language": st.session_state.get("tts_language", "Korean"),
+        "rpm_setting": st.session_state.get("rpm_setting", 60),
+        "pitch_shift": st.session_state.get("pitch_shift", 0.0),
+        "pitch_variance": st.session_state.get("pitch_variance", 1.0),
+        "speed": st.session_state.get("speed", 1.0),
+        "duration": st.session_state.get("duration", 0.0),
+        "similarity": st.session_state.get("similarity", 3.0),
+        "text_guidance": st.session_state.get("text_guidance", 1.0),
+        "subharmonic": st.session_state.get("subharmonic", 1.0),
+        "voice_favorites": st.session_state.get("voice_favorites", {}),
+        "favorite_voice_ids": st.session_state.get("favorite_voice_ids", []),
+        "default_word_gap": st.session_state.get("default_word_gap", 0.0),
+        "default_sentence_gap": st.session_state.get("default_sentence_gap", 0.5),
+        "recent_voices": st.session_state.get("recent_voices", []),
+    }
+    return json.dumps(project_data, ensure_ascii=False, indent=2)
+
+
+def load_project_from_json(json_str: str) -> bool:
+    """JSON에서 프로젝트 로드"""
+    try:
+        project_data = json.loads(json_str)
+
+        # 기본 설정 로드
+        if "project_name" in project_data:
+            st.session_state.project_name = project_data["project_name"]
+        if "selected_voice" in project_data:
+            st.session_state.selected_voice = project_data["selected_voice"]
+        if "selected_voice_id" in project_data:
+            st.session_state.selected_voice_id = project_data["selected_voice_id"]
+        if "script_input" in project_data:
+            st.session_state.script_input = project_data["script_input"]
+        if "max_chars" in project_data:
+            st.session_state.max_chars = project_data["max_chars"]
+        if "voice_favorites" in project_data:
+            st.session_state.voice_favorites = project_data["voice_favorites"]
+        if "favorite_voice_ids" in project_data:
+            st.session_state.favorite_voice_ids = project_data["favorite_voice_ids"]
+        if "default_word_gap" in project_data:
+            st.session_state.default_word_gap = project_data["default_word_gap"]
+        if "default_sentence_gap" in project_data:
+            st.session_state.default_sentence_gap = project_data["default_sentence_gap"]
+        if "recent_voices" in project_data:
+            st.session_state.recent_voices = project_data["recent_voices"]
+
+        return True
+    except Exception as e:
+        st.error(f"프로젝트 로드 실패: {str(e)}")
+        return False
+
+
+@st.dialog("💾 프로젝트 저장/불러오기", width="small")
+def project_dialog():
+    """프로젝트 저장/불러오기 다이얼로그"""
+
+    tab1, tab2 = st.tabs(["💾 저장", "📂 불러오기"])
+
+    with tab1:
+        project_name = st.text_input("프로젝트 이름", value=st.session_state.get("project_name", "새 프로젝트"))
+        st.session_state.project_name = project_name
+
+        if st.button("📥 프로젝트 파일 다운로드", use_container_width=True, type="primary"):
+            json_data = save_project_to_json()
+            st.download_button(
+                "💾 다운로드",
+                json_data,
+                f"{project_name}_{int(time.time())}.stproj",
+                "application/json",
+                use_container_width=True
+            )
+
+    with tab2:
+        uploaded_file = st.file_uploader("프로젝트 파일 선택", type=["stproj", "json"])
+        if uploaded_file:
+            if st.button("📂 프로젝트 불러오기", use_container_width=True, type="primary"):
+                json_str = uploaded_file.read().decode("utf-8")
+                if load_project_from_json(json_str):
+                    st.success("✅ 프로젝트를 불러왔습니다!")
+                    st.rerun()
+
+
+# ==================== Voice Cloning ====================
+
+@st.dialog("🎤 보이스 클로닝", width="small")
+def voice_cloning_dialog():
+    """보이스 클로닝 다이얼로그"""
+
+    st.markdown("#### 커스텀 보이스 생성")
+    st.info("음성 파일을 업로드하여 나만의 보이스를 만드세요!")
+
+    voice_name = st.text_input("보이스 이름", placeholder="예: 나의 목소리")
+    description = st.text_area("설명 (선택)", placeholder="이 보이스에 대한 설명...")
+
+    uploaded_files = st.file_uploader(
+        "음성 파일 업로드",
+        type=["wav", "mp3", "m4a", "ogg"],
+        accept_multiple_files=True,
+        help="고품질 음성 파일을 업로드하세요 (최소 30초 권장)"
+    )
+
+    if uploaded_files:
+        st.caption(f"📁 {len(uploaded_files)}개 파일 선택됨")
+        total_size = sum(f.size for f in uploaded_files)
+        st.caption(f"📊 총 크기: {total_size / 1024 / 1024:.2f} MB")
+
+    st.divider()
+
+    if st.button("🚀 보이스 생성", use_container_width=True, type="primary",
+                disabled=not voice_name or not uploaded_files):
+        if not st.session_state.get("api_key"):
+            st.error("API 키를 먼저 입력해주세요!")
+            return
+
+        with st.spinner("보이스 생성 중... (몇 분 소요될 수 있습니다)"):
+            try:
+                # 파일을 multipart/form-data로 전송
+                files = []
+                for f in uploaded_files:
+                    files.append(("files", (f.name, f.read(), f.type or "audio/wav")))
+
+                data = {
+                    "name": voice_name,
+                }
+                if description:
+                    data["description"] = description
+
+                response = requests.post(
+                    f"{SUPERTONE_API_BASE}/custom-voices",
+                    headers={"x-sup-api-key": st.session_state.api_key},
+                    data=data,
+                    files=files,
+                    timeout=300
+                )
+
+                if response.status_code in [200, 201]:
+                    result = response.json()
+                    st.success(f"✅ 보이스 '{voice_name}' 생성 완료!")
+                    st.json(result)
+                    # 커스텀 보이스 목록 새로고침
+                    st.session_state.custom_voices = []
+                    st.rerun()
+                else:
+                    st.error(f"❌ 생성 실패: {response.status_code}")
+                    st.text(response.text[:500])
+
+            except Exception as e:
+                st.error(f"❌ 오류: {str(e)}")
+
+    st.divider()
+    st.caption("💡 팁: 깨끗한 환경에서 녹음된 음성이 좋은 결과를 만듭니다.")
 
 
 def render_voice_selector():
@@ -837,7 +1052,7 @@ def render_settings_panel() -> Optional[TTSSettings]:
     with col3:
         rpm = st.number_input("⚡ RPM", min_value=1, max_value=1000, value=DEFAULT_RPM, key="rpm_setting")
 
-    # 언어 선택 (모델별 지원 언어)
+    # 언어 선택 (모델별 지원 언어) - 기본값 Korean
     supported_langs = MODEL_LANGUAGES.get(model, ["en", "ko", "ja"])
     lang_display_map = {
         "en": "English", "ko": "Korean", "ja": "Japanese",
@@ -852,10 +1067,15 @@ def render_settings_panel() -> Optional[TTSSettings]:
     lang_options = [lang_display_map.get(l, l) for l in supported_langs]
     lang_code_reverse = {v: k for k, v in lang_display_map.items()}
 
+    # 기본 언어를 Korean으로 설정 (지원되는 경우)
+    default_lang_idx = 0
+    if "Korean" in lang_options:
+        default_lang_idx = lang_options.index("Korean")
+
     col_lang, col_rpm2 = st.columns([2, 1])
     with col_lang:
-        selected_lang_display = st.selectbox("🌐 언어", lang_options, key="tts_language")
-        language_code = lang_code_reverse.get(selected_lang_display, "en")
+        selected_lang_display = st.selectbox("🌐 언어", lang_options, index=default_lang_idx, key="tts_language")
+        language_code = lang_code_reverse.get(selected_lang_display, "ko")
 
     # 모델별 지원 설정 가져오기
     supported_settings = MODEL_VOICE_SETTINGS.get(model, ["speed"])
@@ -1218,8 +1438,21 @@ def main():
                         st.session_state.credits = credits
                     st.success(f"✅ {len(api_voices)}개 + 커스텀 {len(custom_voices)}개")
                     st.rerun()
+
+            st.divider()
+
+            # 보이스 클로닝
+            if st.button("🎤 보이스 클로닝", use_container_width=True):
+                voice_cloning_dialog()
+
         else:
             st.warning("API 키를 입력해주세요")
+
+        st.divider()
+
+        # 프로젝트 저장/불러오기
+        if st.button("💾 프로젝트 저장/불러오기", use_container_width=True):
+            project_dialog()
 
         st.divider()
         st.caption("Made with Streamlit")

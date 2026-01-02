@@ -788,9 +788,26 @@ def download_settings_dialog():
                     merged = merge_audio_blocks(audio_list, sentence_gap, word_gap)
 
                     if merged:
-                        st.session_state.merged_audio = merged
+                        # 대용량 파일은 디스크에 저장
+                        ensure_data_dir()
+                        output_filename = f"tts_merged_{int(time.time())}.wav"
+                        output_path = DATA_DIR / output_filename
+
+                        with open(output_path, "wb") as f:
+                            f.write(merged)
+
+                        st.session_state.merged_audio_path = str(output_path)
+                        st.session_state.merged_audio_filename = output_filename
                         st.session_state.merged_audio_size = len(merged)
+
+                        # 메모리에서 제거 (대용량 파일)
+                        if len(merged) > 50 * 1024 * 1024:  # 50MB 이상
+                            st.session_state.merged_audio = None
+                        else:
+                            st.session_state.merged_audio = merged
+
                         st.success(f"✅ 병합 완료! ({len(merged) / 1024 / 1024:.2f} MB)")
+                        st.rerun()
                     else:
                         st.error("❌ 병합 실패: 오디오 데이터가 없습니다.")
             except MemoryError:
@@ -799,23 +816,54 @@ def download_settings_dialog():
                 st.error(f"❌ 병합 오류: {str(e)}")
 
     # 병합된 오디오가 있으면 다운로드 버튼 표시
-    if st.session_state.get("merged_audio"):
+    merged_path = st.session_state.get("merged_audio_path")
+    merged_size = st.session_state.get("merged_audio_size", 0)
+
+    if merged_path and Path(merged_path).exists():
         st.divider()
-        merged_size = st.session_state.get("merged_audio_size", 0)
         st.success(f"📁 병합된 파일: {merged_size / 1024 / 1024:.2f} MB")
 
-        st.download_button(
-            "🎵 다운로드",
-            st.session_state.merged_audio,
-            f"tts_merged_{int(time.time())}.wav",
-            "audio/wav",
-            use_container_width=True,
-            type="primary"
-        )
+        # 50MB 이하는 일반 다운로드 버튼 사용
+        if merged_size <= 50 * 1024 * 1024:
+            if st.session_state.get("merged_audio"):
+                st.download_button(
+                    "🎵 다운로드",
+                    st.session_state.merged_audio,
+                    st.session_state.get("merged_audio_filename", "merged.wav"),
+                    "audio/wav",
+                    use_container_width=True,
+                    type="primary"
+                )
+            else:
+                # 메모리에 없으면 파일에서 읽기
+                with open(merged_path, "rb") as f:
+                    st.download_button(
+                        "🎵 다운로드",
+                        f.read(),
+                        st.session_state.get("merged_audio_filename", "merged.wav"),
+                        "audio/wav",
+                        use_container_width=True,
+                        type="primary"
+                    )
+        else:
+            # 50MB 초과 대용량 파일
+            st.error("⚠️ 50MB 초과 대용량 파일입니다!")
+            st.warning("브라우저 다운로드가 불안정할 수 있습니다. 아래 경로에서 직접 복사하세요.")
 
-        # 미리듣기 (큰 파일은 제외)
-        if merged_size < 10 * 1024 * 1024:  # 10MB 미만만 미리듣기
+        # 파일 경로 표시 (직접 복사 가능)
+        st.markdown("**📂 파일 저장 위치:**")
+        st.code(merged_path, language=None)
+
+        # 복사 안내
+        if merged_size > 50 * 1024 * 1024:
+            st.info("💡 **파일 탐색기**에서 위 경로로 이동하여 파일을 복사하세요.")
+        else:
+            st.caption("💡 다운로드가 안 되면 위 경로에서 직접 복사하세요")
+
+        # 미리듣기 (10MB 미만만)
+        if merged_size < 10 * 1024 * 1024 and st.session_state.get("merged_audio"):
             st.audio(st.session_state.merged_audio, format="audio/wav")
+
 
 @st.dialog("🎙️ 보이스 라이브러리", width="large")
 def voice_library_dialog():

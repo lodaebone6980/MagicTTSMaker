@@ -106,14 +106,13 @@ class SupertoneClient:
         try:
             while True:
                 page_count += 1
-                # 페이지네이션 파라미터 (여러 형식 시도)
-                params = {"limit": 100}
+                # 페이지네이션 파라미터 (Supertone API 문서 기준)
+                params = {"page_size": 100}  # max 100, snake_case
                 if next_page_token:
-                    params["pageToken"] = next_page_token
-                    params["page_token"] = next_page_token  # 대체 형식
+                    params["next_page_token"] = next_page_token
 
                 response = requests.get(
-                    f"{SUPERTONE_API_BASE}/voices/search",
+                    f"{SUPERTONE_API_BASE}/voices",  # /voices 엔드포인트 (전체 목록)
                     headers=self.get_headers(),
                     params=params,
                     timeout=30
@@ -124,14 +123,14 @@ class SupertoneClient:
                     break
 
                 data = response.json()
-                voices = data.get("voices", data.get("items", data.get("data", [])))
+                voices = data.get("items", [])  # items 배열
                 all_voices.extend(voices)
 
-                # 다음 페이지 토큰 확인 (여러 형식)
-                next_page_token = data.get("nextPageToken") or data.get("next_page_token") or data.get("cursor")
+                # 다음 페이지 토큰 확인
+                next_page_token = data.get("next_page_token")
 
-                # 총 개수 확인 가능하면 체크
-                total = data.get("total", data.get("totalCount", 0))
+                # 총 개수 확인
+                total = data.get("total", 0)
                 if total and len(all_voices) >= total:
                     break
 

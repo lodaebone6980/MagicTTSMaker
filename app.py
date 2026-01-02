@@ -12,10 +12,151 @@ import time
 import re
 import json
 import base64
+import os
+from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple, Dict
 import wave
 import zipfile
+
+# ==================== Persistent Storage ====================
+
+DATA_DIR = Path(__file__).parent / "data"
+PROJECTS_FILE = DATA_DIR / "projects.json"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+
+
+def ensure_data_dir():
+    """데이터 디렉토리 생성"""
+    DATA_DIR.mkdir(exist_ok=True)
+
+
+def load_global_settings() -> Dict:
+    """전역 설정 로드"""
+    ensure_data_dir()
+    if SETTINGS_FILE.exists():
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # JSON에서 로드 시 키가 문자열로 변환되므로 정수로 복원
+                if "voice_favorites" in data:
+                    new_favorites = {}
+                    for voice_id, favs in data["voice_favorites"].items():
+                        new_favorites[voice_id] = {}
+                        for k, v in favs.items():
+                            new_favorites[voice_id][int(k)] = v
+                    data["voice_favorites"] = new_favorites
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_global_settings(settings: Dict):
+    """전역 설정 저장"""
+    ensure_data_dir()
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"설정 저장 실패: {e}")
+
+
+def load_projects() -> List[Dict]:
+    """프로젝트 목록 로드"""
+    ensure_data_dir()
+    if PROJECTS_FILE.exists():
+        try:
+            with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+
+def save_projects(projects: List[Dict]):
+    """프로젝트 목록 저장"""
+    ensure_data_dir()
+    try:
+        with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(projects, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.error(f"프로젝트 저장 실패: {e}")
+
+
+def get_project_by_id(project_id: str) -> Optional[Dict]:
+    """ID로 프로젝트 찾기"""
+    projects = load_projects()
+    for p in projects:
+        if p.get("id") == project_id:
+            return p
+    return None
+
+
+def save_current_project():
+    """현재 프로젝트 저장"""
+    project_id = st.session_state.get("current_project_id")
+    if not project_id:
+        return
+
+    projects = load_projects()
+    project_data = {
+        "id": project_id,
+        "name": st.session_state.get("project_name", "새 프로젝트"),
+        "updated_at": int(time.time()),
+        "selected_voice": st.session_state.get("selected_voice"),
+        "selected_voice_id": st.session_state.get("selected_voice_id"),
+        "script_input": st.session_state.get("script_input", ""),
+        "max_chars": st.session_state.get("max_chars", 300),
+    }
+
+    # 기존 프로젝트 업데이트 또는 새로 추가
+    found = False
+    for i, p in enumerate(projects):
+        if p.get("id") == project_id:
+            projects[i] = project_data
+            found = True
+            break
+
+    if not found:
+        projects.append(project_data)
+
+    save_projects(projects)
+
+
+def create_new_project(name: str) -> str:
+    """새 프로젝트 생성"""
+    project_id = f"proj_{int(time.time())}_{os.urandom(4).hex()}"
+    projects = load_projects()
+    projects.append({
+        "id": project_id,
+        "name": name,
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
+        "selected_voice": None,
+        "selected_voice_id": None,
+        "script_input": "",
+        "max_chars": 300,
+    })
+    save_projects(projects)
+    return project_id
+
+
+def delete_project(project_id: str):
+    """프로젝트 삭제"""
+    projects = load_projects()
+    projects = [p for p in projects if p.get("id") != project_id]
+    save_projects(projects)
+
+
+def load_project_to_session(project: Dict):
+    """프로젝트를 세션에 로드"""
+    st.session_state.current_project_id = project.get("id")
+    st.session_state.project_name = project.get("name", "새 프로젝트")
+    st.session_state.selected_voice = project.get("selected_voice")
+    st.session_state.selected_voice_id = project.get("selected_voice_id")
+    st.session_state.script_input = project.get("script_input", "")
+    st.session_state.max_chars = project.get("max_chars", 300)
 
 # ==================== Configuration ====================
 
@@ -766,6 +907,16 @@ def voice_library_dialog():
 # ==================== Streamlit UI ====================
 
 def init_session_state():
+    # 파일에서 전역 설정 로드
+    if "settings_loaded" not in st.session_state:
+        saved_settings = load_global_settings()
+        st.session_state.voice_favorites = saved_settings.get("voice_favorites", {})
+        st.session_state.favorite_voice_ids = saved_settings.get("favorite_voice_ids", [])
+        st.session_state.default_word_gap = saved_settings.get("default_word_gap", 0.0)
+        st.session_state.default_sentence_gap = saved_settings.get("default_sentence_gap", 0.5)
+        st.session_state.recent_voices = saved_settings.get("recent_voices", [])
+        st.session_state.settings_loaded = True
+
     defaults = {
         "blocks": [],
         "processing": False,
@@ -786,10 +937,25 @@ def init_session_state():
         "favorite_voice_ids": [],  # [voice_id, ...]
         # 프로젝트 설정
         "project_name": "새 프로젝트",
+        "current_project_id": None,
+        # 보이스 변경 추적
+        "last_selected_voice_id": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+
+def save_settings_to_file():
+    """현재 설정을 파일에 저장"""
+    settings = {
+        "voice_favorites": st.session_state.get("voice_favorites", {}),
+        "favorite_voice_ids": st.session_state.get("favorite_voice_ids", []),
+        "default_word_gap": st.session_state.get("default_word_gap", 0.0),
+        "default_sentence_gap": st.session_state.get("default_sentence_gap", 0.5),
+        "recent_voices": st.session_state.get("recent_voices", []),
+    }
+    save_global_settings(settings)
 
 
 def add_to_recent_voices(voice: Dict):
@@ -820,6 +986,7 @@ def toggle_favorite_voice(voice_id: str):
         st.session_state.favorite_voice_ids.remove(voice_id)
     else:
         st.session_state.favorite_voice_ids.append(voice_id)
+    save_settings_to_file()  # 파일에 저장
 
 
 def is_favorite_voice(voice_id: str) -> bool:
@@ -1086,22 +1253,36 @@ def render_settings_panel() -> Optional[TTSSettings]:
     # 즐겨찾기 불러오기/저장
     favorites = st.session_state.voice_favorites.get(voice_id, {})
 
+    # 보이스가 변경되면 자동으로 ⭐1 로드
+    voice_changed = st.session_state.get("last_selected_voice_id") != voice_id
+    if voice_changed:
+        st.session_state.last_selected_voice_id = voice_id
+        if 1 in favorites:
+            st.session_state.fav_load = favorites[1]
+            st.info(f"⭐1 기본 설정 자동 로드됨")
+
     fav_col1, fav_col2, fav_col3, fav_col4 = st.columns([1, 1, 1, 2])
     with fav_col1:
-        if st.button("⭐1 불러오기", use_container_width=True, disabled=1 not in favorites):
+        fav1_label = "⭐1 (기본)" if 1 in favorites else "⭐1"
+        if st.button(fav1_label, use_container_width=True, disabled=1 not in favorites):
             if 1 in favorites:
                 st.session_state.fav_load = favorites[1]
                 st.rerun()
     with fav_col2:
-        if st.button("⭐2 불러오기", use_container_width=True, disabled=2 not in favorites):
+        if st.button("⭐2", use_container_width=True, disabled=2 not in favorites):
             if 2 in favorites:
                 st.session_state.fav_load = favorites[2]
                 st.rerun()
     with fav_col3:
-        if st.button("⭐3 불러오기", use_container_width=True, disabled=3 not in favorites):
+        if st.button("⭐3", use_container_width=True, disabled=3 not in favorites):
             if 3 in favorites:
                 st.session_state.fav_load = favorites[3]
                 st.rerun()
+    with fav_col4:
+        # 저장된 즐겨찾기 표시
+        saved_favs = [str(k) for k in sorted(favorites.keys())]
+        if saved_favs:
+            st.caption(f"저장됨: ⭐{', ⭐'.join(saved_favs)}")
 
     # 즐겨찾기에서 로드된 값 사용
     fav_loaded = st.session_state.pop("fav_load", None)
@@ -1132,13 +1313,15 @@ def render_settings_panel() -> Optional[TTSSettings]:
     # 즐겨찾기 저장 버튼
     save_col1, save_col2, save_col3 = st.columns(3)
     with save_col1:
-        if st.button("⭐1 저장", use_container_width=True):
+        if st.button("⭐1 저장 (기본)", use_container_width=True, type="primary"):
             if voice_id not in st.session_state.voice_favorites:
                 st.session_state.voice_favorites[voice_id] = {}
             st.session_state.voice_favorites[voice_id][1] = {
                 "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
             }
-            st.success("⭐1 저장됨!")
+            save_settings_to_file()  # 파일에 저장
+            st.success("⭐1 저장됨! (기본값)")
+            st.rerun()
     with save_col2:
         if st.button("⭐2 저장", use_container_width=True):
             if voice_id not in st.session_state.voice_favorites:
@@ -1146,7 +1329,9 @@ def render_settings_panel() -> Optional[TTSSettings]:
             st.session_state.voice_favorites[voice_id][2] = {
                 "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
             }
+            save_settings_to_file()  # 파일에 저장
             st.success("⭐2 저장됨!")
+            st.rerun()
     with save_col3:
         if st.button("⭐3 저장", use_container_width=True):
             if voice_id not in st.session_state.voice_favorites:
@@ -1154,7 +1339,9 @@ def render_settings_panel() -> Optional[TTSSettings]:
             st.session_state.voice_favorites[voice_id][3] = {
                 "pitch_shift": pitch_shift, "pitch_variance": pitch_variance, "speed": speed
             }
+            save_settings_to_file()  # 파일에 저장
             st.success("⭐3 저장됨!")
+            st.rerun()
 
     # 고급 설정 (Sona 1 전용)
     duration = 0.0
@@ -1450,9 +1637,56 @@ def main():
 
         st.divider()
 
-        # 프로젝트 저장/불러오기
-        if st.button("💾 프로젝트 저장/불러오기", use_container_width=True):
-            project_dialog()
+        # 프로젝트 관리
+        st.markdown("##### 📁 프로젝트")
+        projects = load_projects()
+
+        # 현재 프로젝트 표시
+        current_id = st.session_state.get("current_project_id")
+        current_name = st.session_state.get("project_name", "새 프로젝트")
+
+        if current_id:
+            st.success(f"📂 {current_name}")
+            if st.button("💾 저장", use_container_width=True):
+                save_current_project()
+                st.success("저장됨!")
+                st.rerun()
+        else:
+            st.info("프로젝트를 선택하세요")
+
+        # 프로젝트 목록
+        if projects:
+            project_names = ["(새 프로젝트)"] + [p.get("name", "이름없음") for p in projects]
+            project_ids = [None] + [p.get("id") for p in projects]
+
+            selected_idx = st.selectbox(
+                "프로젝트 선택",
+                range(len(project_names)),
+                format_func=lambda i: project_names[i],
+                key="project_selector",
+                label_visibility="collapsed"
+            )
+
+            if selected_idx > 0:
+                selected_project = projects[selected_idx - 1]
+                if st.session_state.get("current_project_id") != selected_project.get("id"):
+                    if st.button("📂 불러오기", use_container_width=True, type="primary"):
+                        load_project_to_session(selected_project)
+                        st.success(f"'{selected_project.get('name')}' 로드됨!")
+                        st.rerun()
+
+        # 새 프로젝트 생성
+        with st.expander("➕ 새 프로젝트 생성"):
+            new_name = st.text_input("프로젝트 이름", placeholder="새 프로젝트", key="new_project_name")
+            if st.button("생성", use_container_width=True, disabled=not new_name):
+                new_id = create_new_project(new_name)
+                st.session_state.current_project_id = new_id
+                st.session_state.project_name = new_name
+                st.session_state.selected_voice = None
+                st.session_state.selected_voice_id = None
+                st.session_state.script_input = ""
+                st.success(f"'{new_name}' 생성됨!")
+                st.rerun()
 
         st.divider()
         st.caption("Made with Streamlit")

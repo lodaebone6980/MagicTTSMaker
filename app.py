@@ -823,8 +823,8 @@ def download_settings_dialog():
         st.divider()
         st.success(f"📁 병합된 파일: {merged_size / 1024 / 1024:.2f} MB")
 
-        # 50MB 이하는 일반 다운로드 버튼 사용
-        if merged_size <= 50 * 1024 * 1024:
+        # 30MB 이하만 다운로드 버튼 사용 (Streamlit 한계)
+        if merged_size <= 30 * 1024 * 1024:
             if st.session_state.get("merged_audio"):
                 st.download_button(
                     "🎵 다운로드",
@@ -836,29 +836,32 @@ def download_settings_dialog():
                 )
             else:
                 # 메모리에 없으면 파일에서 읽기
-                with open(merged_path, "rb") as f:
-                    st.download_button(
-                        "🎵 다운로드",
-                        f.read(),
-                        st.session_state.get("merged_audio_filename", "merged.wav"),
-                        "audio/wav",
-                        use_container_width=True,
-                        type="primary"
-                    )
+                try:
+                    with open(merged_path, "rb") as f:
+                        st.download_button(
+                            "🎵 다운로드",
+                            f.read(),
+                            st.session_state.get("merged_audio_filename", "merged.wav"),
+                            "audio/wav",
+                            use_container_width=True,
+                            type="primary"
+                        )
+                except Exception as e:
+                    st.error(f"파일 읽기 오류: {e}")
         else:
-            # 50MB 초과 대용량 파일
-            st.error("⚠️ 50MB 초과 대용량 파일입니다!")
-            st.warning("브라우저 다운로드가 불안정할 수 있습니다. 아래 경로에서 직접 복사하세요.")
+            # 30MB 초과 대용량 파일 - 다운로드 버튼 사용 불가
+            st.error("⚠️ 30MB 초과! 브라우저 다운로드가 지원되지 않습니다.")
 
-        # 파일 경로 표시 (직접 복사 가능)
+        # 파일 경로 항상 표시
+        st.markdown("---")
         st.markdown("**📂 파일 저장 위치:**")
         st.code(merged_path, language=None)
 
-        # 복사 안내
-        if merged_size > 50 * 1024 * 1024:
-            st.info("💡 **파일 탐색기**에서 위 경로로 이동하여 파일을 복사하세요.")
+        if merged_size > 30 * 1024 * 1024:
+            st.warning("👆 위 경로를 파일 탐색기에서 열어 복사하세요!")
+            st.info(f"💡 팁: 터미널에서 `cp '{merged_path}' ~/` 명령으로 홈 폴더로 복사 가능")
         else:
-            st.caption("💡 다운로드가 안 되면 위 경로에서 직접 복사하세요")
+            st.caption("💡 다운로드 버튼이 작동하지 않으면 위 경로에서 직접 복사하세요")
 
         # 미리듣기 (10MB 미만만)
         if merged_size < 10 * 1024 * 1024 and st.session_state.get("merged_audio"):

@@ -760,39 +760,62 @@ def download_settings_dialog():
 
     st.divider()
 
+    # 선택된 완료 블록 가져오기
+    selected_completed = [b for b in st.session_state.blocks
+                         if b.index in st.session_state.selected_blocks and b.status == "completed"]
+
+    if not selected_completed:
+        st.warning("선택된 오디오가 없습니다.")
+        return
+
+    st.caption(f"📊 {len(selected_completed)}개 블록 병합")
+
     # 기본값 저장 버튼
-    col_save, col_dl = st.columns(2)
+    col_save, col_merge = st.columns(2)
 
     with col_save:
         if st.button("💾 기본값으로 저장", use_container_width=True):
             st.session_state.default_word_gap = word_gap
             st.session_state.default_sentence_gap = sentence_gap
+            save_settings_to_file()
             st.success("✅ 기본값 저장됨!")
 
-    with col_dl:
-        # 선택된 완료 블록 가져오기
-        selected_completed = [b for b in st.session_state.blocks
-                             if b.index in st.session_state.selected_blocks and b.status == "completed"]
+    with col_merge:
+        if st.button("🔄 병합하기", use_container_width=True, type="primary"):
+            try:
+                with st.spinner(f"🔄 {len(selected_completed)}개 블록 병합 중..."):
+                    audio_list = [b.audio_data for b in selected_completed if b.audio_data]
+                    merged = merge_audio_blocks(audio_list, sentence_gap, word_gap)
 
-        if selected_completed:
-            audio_list = [b.audio_data for b in selected_completed if b.audio_data]
-            merged = merge_audio_blocks(audio_list, sentence_gap, word_gap)
+                    if merged:
+                        st.session_state.merged_audio = merged
+                        st.session_state.merged_audio_size = len(merged)
+                        st.success(f"✅ 병합 완료! ({len(merged) / 1024 / 1024:.2f} MB)")
+                    else:
+                        st.error("❌ 병합 실패: 오디오 데이터가 없습니다.")
+            except MemoryError:
+                st.error("❌ 메모리 부족! 블록 수를 줄여주세요.")
+            except Exception as e:
+                st.error(f"❌ 병합 오류: {str(e)}")
 
-            if merged:
-                st.download_button(
-                    "🎵 다운로드",
-                    merged,
-                    f"tts_merged_{int(time.time())}.wav",
-                    "audio/wav",
-                    use_container_width=True,
-                    type="primary"
-                )
-        else:
-            st.warning("선택된 오디오 없음")
+    # 병합된 오디오가 있으면 다운로드 버튼 표시
+    if st.session_state.get("merged_audio"):
+        st.divider()
+        merged_size = st.session_state.get("merged_audio_size", 0)
+        st.success(f"📁 병합된 파일: {merged_size / 1024 / 1024:.2f} MB")
 
-    # 현재 설정 표시
-    st.caption(f"현재 설정: 단어 {word_gap}초 | 문장 {sentence_gap}초")
+        st.download_button(
+            "🎵 다운로드",
+            st.session_state.merged_audio,
+            f"tts_merged_{int(time.time())}.wav",
+            "audio/wav",
+            use_container_width=True,
+            type="primary"
+        )
 
+        # 미리듣기 (큰 파일은 제외)
+        if merged_size < 10 * 1024 * 1024:  # 10MB 미만만 미리듣기
+            st.audio(st.session_state.merged_audio, format="audio/wav")
 
 @st.dialog("🎙️ 보이스 라이브러리", width="large")
 def voice_library_dialog():

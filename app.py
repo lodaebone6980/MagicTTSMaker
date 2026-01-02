@@ -100,28 +100,40 @@ class SupertoneClient:
     def get_voices(self) -> List[dict]:
         """API에서 보이스 목록 가져오기"""
         try:
+            # /voices/search 엔드포인트 사용
             response = requests.get(
-                f"{SUPERTONE_API_BASE}/voices",
+                f"{SUPERTONE_API_BASE}/voices/search",
                 headers=self.get_headers(),
                 timeout=30
             )
             if response.status_code == 200:
                 data = response.json()
-                voices = data.get("voices", [])
+                voices = data.get("voices", data.get("items", []))
+
                 # API 응답 형식에 맞게 변환
                 formatted = []
                 for v in voices:
+                    # language 필드 처리 (배열일 수 있음)
+                    lang = v.get("language", ["en"])
+                    if isinstance(lang, list):
+                        lang = lang[0] if lang else "en"
+                    lang_display = {"ko": "Korean", "en": "English", "ja": "Japanese"}.get(lang, lang)
+
+                    # use_cases를 genres로 사용
+                    genres = v.get("use_cases", v.get("genres", v.get("tags", [])))
+
                     formatted.append({
                         "voice_id": v.get("voice_id", v.get("id", "")),
                         "name": v.get("name", "Unknown"),
-                        "language": v.get("language", "English"),
-                        "gender": v.get("gender", "Unknown"),
-                        "age_group": v.get("age_group", v.get("age", "Unknown")),
-                        "genres": v.get("genres", v.get("tags", [])),
+                        "language": lang_display,
+                        "gender": v.get("gender", "Unknown").capitalize(),
+                        "age_group": v.get("age", v.get("age_group", "Unknown")).replace("-", " ").title().replace(" ", "-"),
+                        "genres": [g.capitalize() for g in genres] if genres else [],
                         "styles": v.get("styles", ["neutral"]),
                         "description": v.get("description", ""),
                         "is_new": v.get("is_new", False),
-                        "image_url": v.get("image_url", v.get("thumbnail", "")),
+                        # thumbnail_image_url 필드 사용
+                        "image_url": v.get("thumbnail_image_url", v.get("thumbnail", v.get("image_url", ""))),
                     })
                 return formatted
             else:
